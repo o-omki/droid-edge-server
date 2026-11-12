@@ -1,30 +1,108 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+import "dart:async";
 
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
+import "package:droid_edge_server/app.dart";
+import "package:droid_edge_server/models/request_log_entry.dart";
+import "package:droid_edge_server/server/edge_http_server.dart";
+import "package:droid_edge_server/services/network_info_service.dart";
+import "package:flutter_test/flutter_test.dart";
 
-import 'package:droid_edge_server/main.dart';
+class _FakeNetworkInfoService extends NetworkInfoService {
+  @override
+  Future<String> getLocalIpAddress() async => "192.168.1.42";
+}
+
+class _FakeEdgeHttpServer extends EdgeHttpServer {
+  final StreamController<RequestLogEntry> _controller =
+      StreamController<RequestLogEntry>.broadcast();
+
+  bool _running = false;
+  DateTime? _startedAt;
+
+  void emitLog(RequestLogEntry entry) {
+    _controller.add(entry);
+  }
+
+  @override
+  Stream<RequestLogEntry> get requestLogs => _controller.stream;
+
+  @override
+  bool get isRunning => _running;
+
+  @override
+  DateTime? get startedAt => _startedAt;
+
+  @override
+  Future<int> start({int port = 8080}) async {
+    _running = true;
+    _startedAt = DateTime.now();
+    return port == 0 ? 8080 : port;
+  }
+
+  @override
+  Future<void> stop() async {
+    _running = false;
+    _startedAt = null;
+  }
+
+  @override
+  Future<void> dispose() async {
+    await stop();
+    await _controller.close();
+  }
+}
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets("Dashboard renders Material 3 shell and toggles server", (
+    WidgetTester tester,
+  ) async {
+    final server = _FakeEdgeHttpServer();
+    addTearDown(server.dispose);
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    await tester.pumpWidget(
+      DroidEdgeApp(
+        httpServer: server,
+        networkInfoService: _FakeNetworkInfoService(),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    expect(find.text("Droid Edge Server"), findsOneWidget);
+    expect(find.text("Stopped"), findsOneWidget);
+    expect(find.text("Start Server"), findsOneWidget);
+    expect(find.text("http://192.168.1.42:8080"), findsOneWidget);
+    expect(find.text("Waiting for HTTP requests"), findsOneWidget);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    await tester.tap(find.text("Start Server"));
+    await tester.pumpAndSettle();
+
+    expect(find.text("Running"), findsOneWidget);
+    expect(find.text("Stop Server"), findsOneWidget);
+
+    server.emitLog(
+      RequestLogEntry(
+        id: "1",
+        timestamp: DateTime(2026, 11, 12, 16, 0, 0),
+        method: "GET",
+        path: "/v1/health",
+        statusCode: 200,
+        latencyMs: 3,
+        remoteIp: "192.168.1.10",
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text("/v1/health"), findsOneWidget);
+    expect(find.text("1"), findsOneWidget);
+
+    await tester.tap(find.text("Clear"));
+    await tester.pumpAndSettle();
+
+    expect(find.text("Waiting for HTTP requests"), findsOneWidget);
+    expect(find.text("0"), findsOneWidget);
+
+    await tester.tap(find.text("Stop Server"));
+    await tester.pumpAndSettle();
+
+    expect(find.text("Stopped"), findsOneWidget);
   });
 }
