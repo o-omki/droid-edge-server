@@ -2,6 +2,7 @@ import "dart:convert";
 import "dart:io";
 
 import "package:droid_edge_server/models/request_log_entry.dart";
+import "package:droid_edge_server/models/telemetry_snapshot.dart";
 import "package:droid_edge_server/server/edge_http_server.dart";
 import "package:flutter_test/flutter_test.dart";
 
@@ -70,6 +71,42 @@ void main() {
       expect(logs, hasLength(1));
       expect(logs.first.statusCode, 404);
       expect(logs.first.path, "/unknown");
+    });
+
+    test("serves GET /v1/status with telemetry payload", () async {
+      final statusServer = EdgeHttpServer(
+        telemetryProvider: () => TelemetrySnapshot(
+          batteryLevel: 88,
+          batteryState: "charging",
+          networkType: "wifi",
+          thermalStatus: "none",
+          batteryTemperatureCelsius: 30.5,
+          timestamp: DateTime.utc(2026, 11, 12, 12, 0, 0),
+        ),
+      );
+      addTearDown(statusServer.dispose);
+
+      final port = await statusServer.start(port: 0);
+      final client = HttpClient();
+      addTearDown(client.close);
+
+      final request = await client.get("127.0.0.1", port, "/v1/status");
+      final response = await request.close();
+      final body = await utf8.decoder.bind(response).join();
+
+      expect(response.statusCode, HttpStatus.ok);
+      final jsonBody = jsonDecode(body) as Map<String, dynamic>;
+      expect(jsonBody["status"], "ok");
+      expect(jsonBody["hostname"], "android-edge.local");
+      expect(jsonBody["port"], port);
+
+      final telemetry = jsonBody["telemetry"] as Map<String, dynamic>;
+      expect(telemetry["battery_percent"], 88);
+      expect(telemetry["battery_state"], "charging");
+      expect(telemetry["is_charging"], isTrue);
+      expect(telemetry["network_type"], "wifi");
+      expect(telemetry["thermal_status"], "none");
+      expect(telemetry["battery_temperature_c"], 30.5);
     });
   });
 }

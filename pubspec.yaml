@@ -45,9 +45,15 @@ dependencies:
   shelf_router: ^1.1.5
 
   # Local Network & UI Utilities
-  network_info_plus: ^8.2.2
+  network_info_plus: ">=8.0.0 <8.2.2"
   pretty_qr_code: ^3.6.0
   dynamic_color: ^2.1.0
+
+  # Phase 2: Background Execution, mDNS & Hardware Telemetry
+  flutter_foreground_task: ^10.0.0
+  bonsoir: ">=6.0.0 <8.0.0"
+  battery_plus: ^7.1.2
+  connectivity_plus: ^7.0.0
 
 dev_dependencies:
   flutter_test:

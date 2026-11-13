@@ -9,6 +9,9 @@ class ServerState extends Equatable {
     this.port = 8080,
     this.startedAt,
     this.errorMessage,
+    this.mdnsHostname = "android-edge.local",
+    this.mdnsActive = false,
+    this.batteryOptimizationIgnored = true,
   });
 
   final ServerStatusKind status;
@@ -16,12 +19,16 @@ class ServerState extends Equatable {
   final int port;
   final DateTime? startedAt;
   final String? errorMessage;
+  final String mdnsHostname;
+  final bool mdnsActive;
+  final bool batteryOptimizationIgnored;
 
   bool get isRunning => status == ServerStatusKind.running;
   bool get isBusy =>
       status == ServerStatusKind.starting || status == ServerStatusKind.stopping;
 
   String get baseUrl => "http://$ipAddress:$port";
+  String get mdnsUrl => "http://$mdnsHostname:$port";
 
   ServerState copyWith({
     ServerStatusKind? status,
@@ -31,6 +38,9 @@ class ServerState extends Equatable {
     bool clearStartedAt = false,
     String? errorMessage,
     bool clearError = false,
+    String? mdnsHostname,
+    bool? mdnsActive,
+    bool? batteryOptimizationIgnored,
   }) {
     return ServerState(
       status: status ?? this.status,
@@ -38,6 +48,10 @@ class ServerState extends Equatable {
       port: port ?? this.port,
       startedAt: clearStartedAt ? null : (startedAt ?? this.startedAt),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      mdnsHostname: mdnsHostname ?? this.mdnsHostname,
+      mdnsActive: mdnsActive ?? this.mdnsActive,
+      batteryOptimizationIgnored:
+          batteryOptimizationIgnored ?? this.batteryOptimizationIgnored,
     );
   }
 
@@ -48,6 +62,9 @@ class ServerState extends Equatable {
         port,
         startedAt,
         errorMessage,
+        mdnsHostname,
+        mdnsActive,
+        batteryOptimizationIgnored,
       ];
 }
 

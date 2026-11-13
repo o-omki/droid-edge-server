@@ -31,7 +31,7 @@ class NetworkQrCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final endpointUrl = state.baseUrl;
-    final healthCurl = "curl $endpointUrl/v1/health";
+    final statusCurl = "curl ${state.mdnsUrl}/v1/status";
 
     return Card(
       child: Padding(
@@ -127,7 +127,7 @@ class NetworkQrCard extends StatelessWidget {
                           OutlinedButton.icon(
                             onPressed: () => _copyToClipboard(
                               context,
-                              healthCurl,
+                              statusCurl,
                               "curl command",
                             ),
                             icon: const Icon(Icons.terminal_rounded, size: 16),
@@ -149,7 +149,7 @@ class NetworkQrCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: SelectableText(
-                healthCurl,
+                statusCurl,
                 style: textTheme.bodySmall?.copyWith(
                   fontFamily: "monospace",
                   color: colorScheme.onSurfaceVariant,

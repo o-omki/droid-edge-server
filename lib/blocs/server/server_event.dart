@@ -27,3 +27,13 @@ final class ServerIpRefreshRequested extends ServerEvent {
   const ServerIpRefreshRequested();
 }
 
+/// Checks whether the app is exempt from Android battery optimisation.
+final class ServerBatteryOptimizationChecked extends ServerEvent {
+  const ServerBatteryOptimizationChecked();
+}
+
+/// Prompts the user to exempt the app from Android battery optimisation.
+final class ServerBatteryOptimizationRequested extends ServerEvent {
+  const ServerBatteryOptimizationRequested();
+}
+
