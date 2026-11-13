@@ -6,9 +6,13 @@ import "package:shelf/shelf.dart";
 import "package:shelf/shelf_io.dart" as shelf_io;
 import "package:shelf_router/shelf_router.dart";
 
+import "../engines/barcode_engine.dart";
+import "../engines/ocr_engine.dart";
 import "../models/request_log_entry.dart";
 import "../models/telemetry_snapshot.dart";
+import "routes/barcode_routes.dart";
 import "routes/health_routes.dart";
+import "routes/ocr_routes.dart";
 import "routes/status_routes.dart";
 
 /// Embedded HTTP server built on `shelf` and `shelf_router`.
@@ -18,11 +22,17 @@ import "routes/status_routes.dart";
 class EdgeHttpServer {
   EdgeHttpServer({
     FutureOr<TelemetrySnapshot> Function()? telemetryProvider,
+    OcrEngine? ocrEngine,
+    BarcodeEngine? barcodeEngine,
     this.hostname = "android-edge.local",
-  }) : _telemetryProvider = telemetryProvider ??
-            (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc()));
+  })  : _telemetryProvider = telemetryProvider ??
+            (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc())),
+        _ocrEngine = ocrEngine ?? MlKitOcrEngine(),
+        _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine();
 
   final FutureOr<TelemetrySnapshot> Function() _telemetryProvider;
+  final OcrEngine _ocrEngine;
+  final BarcodeEngine _barcodeEngine;
   final String hostname;
 
   HttpServer? _server;
@@ -61,8 +71,12 @@ class EdgeHttpServer {
       telemetryProvider: _telemetryProvider,
       hostname: hostname,
     );
+    final ocrRoutes = OcrRoutes(ocrEngine: _ocrEngine);
+    final barcodeRoutes = BarcodeRoutes(barcodeEngine: _barcodeEngine);
     rootRouter.mount("/", healthRoutes.router.call);
     rootRouter.mount("/", statusRoutes.router.call);
+    rootRouter.mount("/", ocrRoutes.router.call);
+    rootRouter.mount("/", barcodeRoutes.router.call);
 
     final handler = const Pipeline()
         .addMiddleware(_requestLoggingMiddleware())
@@ -108,6 +122,8 @@ class EdgeHttpServer {
 
   Future<void> dispose() async {
     await stop();
+    await _ocrEngine.dispose();
+    await _barcodeEngine.dispose();
     await _logController.close();
   }
 
