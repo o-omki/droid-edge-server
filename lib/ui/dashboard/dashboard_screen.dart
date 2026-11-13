@@ -7,9 +7,12 @@ import "../../blocs/request_log/request_log_state.dart";
 import "../../blocs/server/server_bloc.dart";
 import "../../blocs/server/server_event.dart";
 import "../../blocs/server/server_state.dart";
+import "../../blocs/telemetry/telemetry_cubit.dart";
+import "../../blocs/telemetry/telemetry_state.dart";
 import "widgets/network_qr_card.dart";
 import "widgets/request_log_list.dart";
 import "widgets/server_control_card.dart";
+import "widgets/telemetry_card.dart";
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({
@@ -95,6 +98,21 @@ class DashboardScreen extends StatelessWidget {
                           onRefreshIp: () => context.read<ServerBloc>().add(
                             const ServerIpRefreshRequested(),
                           ),
+                        ),
+                        const SizedBox(height: 16),
+                        BlocBuilder<TelemetryCubit, TelemetryState>(
+                          builder: (context, telemetryState) {
+                            return TelemetryCard(
+                              telemetryState: telemetryState,
+                              serverState: serverState,
+                              onRefreshTelemetry: () =>
+                                  context.read<TelemetryCubit>().refresh(),
+                              onRequestBatteryOptimization: () =>
+                                  context.read<ServerBloc>().add(
+                                        const ServerBatteryOptimizationRequested(),
+                                      ),
+                            );
+                          },
                         ),
                       ],
                     );
