@@ -7,14 +7,23 @@ import "package:shelf/shelf_io.dart" as shelf_io;
 import "package:shelf_router/shelf_router.dart";
 
 import "../models/request_log_entry.dart";
+import "../models/telemetry_snapshot.dart";
 import "routes/health_routes.dart";
+import "routes/status_routes.dart";
 
 /// Embedded HTTP server built on `shelf` and `shelf_router`.
 ///
 /// Kept independent of the UI and BLoC layers; publishes a [RequestLogEntry]
 /// to [requestLogs] for each handled request.
 class EdgeHttpServer {
-  EdgeHttpServer();
+  EdgeHttpServer({
+    FutureOr<TelemetrySnapshot> Function()? telemetryProvider,
+    this.hostname = "android-edge.local",
+  }) : _telemetryProvider = telemetryProvider ??
+            (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc()));
+
+  final FutureOr<TelemetrySnapshot> Function() _telemetryProvider;
+  final String hostname;
 
   HttpServer? _server;
   DateTime? _startedAt;
@@ -46,7 +55,14 @@ class EdgeHttpServer {
     final healthRoutes = HealthRoutes(
       uptimeSecondsProvider: () => uptimeSeconds,
     );
+    final statusRoutes = StatusRoutes(
+      uptimeSecondsProvider: () => uptimeSeconds,
+      boundPortProvider: () => boundPort,
+      telemetryProvider: _telemetryProvider,
+      hostname: hostname,
+    );
     rootRouter.mount("/", healthRoutes.router.call);
+    rootRouter.mount("/", statusRoutes.router.call);
 
     final handler = const Pipeline()
         .addMiddleware(_requestLoggingMiddleware())
