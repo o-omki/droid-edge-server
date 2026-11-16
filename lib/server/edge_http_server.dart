@@ -14,6 +14,7 @@ import "routes/barcode_routes.dart";
 import "routes/health_routes.dart";
 import "routes/ocr_routes.dart";
 import "routes/status_routes.dart";
+import "routes/web_ui_routes.dart";
 
 /// Embedded HTTP server built on `shelf` and `shelf_router`.
 ///
@@ -24,6 +25,7 @@ class EdgeHttpServer {
     FutureOr<TelemetrySnapshot> Function()? telemetryProvider,
     OcrEngine? ocrEngine,
     BarcodeEngine? barcodeEngine,
+    this.webAssetLoader,
     this.hostname = "android-edge.local",
   })  : _telemetryProvider = telemetryProvider ??
             (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc())),
@@ -33,6 +35,7 @@ class EdgeHttpServer {
   final FutureOr<TelemetrySnapshot> Function() _telemetryProvider;
   final OcrEngine _ocrEngine;
   final BarcodeEngine _barcodeEngine;
+  final WebAssetLoader? webAssetLoader;
   final String hostname;
 
   HttpServer? _server;
@@ -73,10 +76,12 @@ class EdgeHttpServer {
     );
     final ocrRoutes = OcrRoutes(ocrEngine: _ocrEngine);
     final barcodeRoutes = BarcodeRoutes(barcodeEngine: _barcodeEngine);
+    final webUiRoutes = WebUiRoutes(assetLoader: webAssetLoader);
     rootRouter.mount("/", healthRoutes.router.call);
     rootRouter.mount("/", statusRoutes.router.call);
     rootRouter.mount("/", ocrRoutes.router.call);
     rootRouter.mount("/", barcodeRoutes.router.call);
+    rootRouter.mount("/", webUiRoutes.router.call);
 
     final handler = const Pipeline()
         .addMiddleware(_requestLoggingMiddleware())
