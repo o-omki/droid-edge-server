@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Droid Edge Server — Local OCR &amp; Vision Console</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-badge" aria-hidden="true">DE</div>
+        <div>
+          <h1>Droid Edge Server</h1>
+          <p class="subtitle">100% Offline LAN OCR &amp; Barcode Console</p>
+        </div>
+      </div>
+      <div class="server-pill" id="serverStatusPill" title="Live device status">
+        <span class="dot" id="serverStatusDot"></span>
+        <span id="serverStatusText">Connecting…</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="controls-bar" aria-label="Processing controls">
+        <div class="mode-group" role="tablist" aria-label="Output mode">
+          <button type="button" class="mode-btn active" data-mode="raw" role="tab" aria-selected="true">
+            Raw Text
+          </button>
+          <button type="button" class="mode-btn" data-mode="json" role="tab" aria-selected="false">
+            Structured JSON
+          </button>
+          <button type="button" class="mode-btn" data-mode="barcode" role="tab" aria-selected="false">
+            Barcode Scan
+          </button>
+        </div>
+
+        <div class="right-controls">
+          <label class="script-picker" id="scriptPickerWrap">
+            <span>Script</span>
+            <select id="scriptSelect" aria-label="OCR Script">
+              <option value="latin" selected>Latin</option>
+              <option value="devanagari">Devanagari</option>
+              <option value="chinese">Chinese</option>
+              <option value="japanese">Japanese</option>
+              <option value="korean">Korean</option>
+            </select>
+          </label>
+          <button type="button" class="btn-secondary" id="clearBatchBtn" disabled>
+            Clear
+          </button>
+        </div>
+      </section>
+
+      <section
+        class="drop-zone"
+        id="dropZone"
+        tabindex="0"
+        role="button"
+        aria-label="Drop images here, click to browse, or paste from clipboard"
+      >
+        <input
+          type="file"
+          id="fileInput"
+          accept="image/*"
+          multiple
+          hidden
+        >
+        <div class="drop-zone-inner">
+          <div class="drop-icon" aria-hidden="true">⇪</div>
+          <p class="drop-title">Drop images here, click to browse, or press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste</p>
+          <p class="drop-hint">Supports single or batch images (JPEG, PNG, WebP). Processed locally on-device.</p>
+        </div>
+      </section>
+
+      <section class="batch-strip hidden" id="batchStrip" aria-label="Batch queue"></section>
+
+      <section class="workspace" id="workspace">
+        <div class="pane pane-left">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h2>Image &amp; Bounding Boxes</h2>
+              <span class="meta-chip hidden" id="dimensionsChip"></span>
+            </div>
+            <div class="pane-actions">
+              <label class="toggle-chip" title="Toggle bounding box overlay">
+                <input type="checkbox" id="overlayToggle" checked>
+                <span>Overlays</span>
+              </label>
+              <select id="overlayLevelSelect" class="mini-select" aria-label="Overlay detail level">
+                <option value="blocks">Blocks</option>
+                <option value="lines" selected>Lines</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="image-stage" id="imageStage">
+            <div class="empty-state" id="imageEmptyState">
+              No image selected yet. Drop or paste an image above to inspect bounding-box overlays.
+            </div>
+            <div class="canvas-wrapper hidden" id="canvasWrapper">
+              <img id="previewImage" alt="Uploaded preview">
+              <svg id="overlaySvg" class="overlay-svg" preserveAspectRatio="none"></svg>
+            </div>
+          </div>
+          <div class="box-inspector" id="hoverInspector">
+            <span class="box-inspector-tag" id="inspectorTag">Region</span>
+            <span class="box-inspector-text muted" id="inspectorText">Hover or click a bounding box to inspect or copy</span>
+            <button type="button" class="btn-secondary btn-xs hidden" id="copyBoxBtn">Copy Region</button>
+            <button type="button" class="btn-secondary btn-xs hidden" id="clearBoxBtn" title="Clear selection">×</button>
+          </div>
+        </div>
+
+        <div class="pane pane-right">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h2 id="outputHeading">Extracted Text</h2>
+              <span class="meta-chip hidden" id="latencyChip"></span>
+              <span class="meta-chip hidden" id="summaryChip"></span>
+            </div>
+            <div class="pane-actions">
+              <button type="button" class="btn-secondary" id="copyBtn" disabled>Copy</button>
+              <button type="button" class="btn-secondary" id="downloadBtn" disabled>Download</button>
+            </div>
+          </div>
+
+          <div class="output-stage">
+            <div class="empty-state" id="outputEmptyState">
+              Results will appear here after processing.
+            </div>
+            <div class="raw-text-lines hidden" id="rawTextLines"></div>
+            <div class="barcode-cards hidden" id="barcodeCards"></div>
+            <pre class="output-pre hidden" id="outputPre"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+
