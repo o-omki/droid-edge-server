@@ -62,4 +62,7 @@ dependencies {
 
     // Bundled ML Kit Barcode Scanning model
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // Bundled ML Kit Face Detection model (offline PII face redaction)
+    implementation("com.google.mlkit:face-detection:16.1.7")
 }
