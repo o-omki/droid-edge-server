@@ -1,6 +1,8 @@
 import "package:flutter/material.dart";
 import "package:flutter_bloc/flutter_bloc.dart";
 
+import "../../blocs/document_pipeline/document_pipeline_cubit.dart";
+import "../../blocs/document_pipeline/document_pipeline_state.dart";
 import "../../blocs/request_log/request_log_bloc.dart";
 import "../../blocs/request_log/request_log_event.dart";
 import "../../blocs/request_log/request_log_state.dart";
@@ -9,6 +11,7 @@ import "../../blocs/server/server_event.dart";
 import "../../blocs/server/server_state.dart";
 import "../../blocs/telemetry/telemetry_cubit.dart";
 import "../../blocs/telemetry/telemetry_state.dart";
+import "widgets/document_pipeline_card.dart";
 import "widgets/network_qr_card.dart";
 import "widgets/request_log_list.dart";
 import "widgets/server_control_card.dart";
@@ -115,6 +118,17 @@ class DashboardScreen extends StatelessWidget {
                           },
                         ),
                       ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                BlocBuilder<DocumentPipelineCubit, DocumentPipelineState>(
+                  builder: (context, docState) {
+                    return DocumentPipelineCard(
+                      state: docState,
+                      onClear: () => context
+                          .read<DocumentPipelineCubit>()
+                          .clearHistory(),
                     );
                   },
                 ),
