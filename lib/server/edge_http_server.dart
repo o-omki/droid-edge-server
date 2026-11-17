@@ -7,10 +7,16 @@ import "package:shelf/shelf_io.dart" as shelf_io;
 import "package:shelf_router/shelf_router.dart";
 
 import "../engines/barcode_engine.dart";
+import "../engines/face_detection_engine.dart";
 import "../engines/ocr_engine.dart";
+import "../engines/pdf_rasterizer.dart";
+import "../engines/pii_redaction_engine.dart";
+import "../engines/searchable_pdf_engine.dart";
+import "../models/document_pipeline_models.dart";
 import "../models/request_log_entry.dart";
 import "../models/telemetry_snapshot.dart";
 import "routes/barcode_routes.dart";
+import "routes/document_routes.dart";
 import "routes/health_routes.dart";
 import "routes/ocr_routes.dart";
 import "routes/status_routes.dart";
@@ -25,16 +31,39 @@ class EdgeHttpServer {
     FutureOr<TelemetrySnapshot> Function()? telemetryProvider,
     OcrEngine? ocrEngine,
     BarcodeEngine? barcodeEngine,
+    FaceDetectionEngine? faceDetectionEngine,
+    PdfRasterizer? pdfRasterizer,
+    SearchablePdfEngine? searchablePdfEngine,
+    PiiRedactionEngine? piiRedactionEngine,
     this.webAssetLoader,
     this.hostname = "android-edge.local",
   })  : _telemetryProvider = telemetryProvider ??
             (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc())),
         _ocrEngine = ocrEngine ?? MlKitOcrEngine(),
-        _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine();
+        _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine(),
+        _faceDetectionEngine =
+            faceDetectionEngine ?? MlKitFaceDetectionEngine(),
+        _pdfRasterizer = pdfRasterizer ?? PdfxDocumentRasterizer() {
+    _searchablePdfEngine = searchablePdfEngine ??
+        SearchablePdfEngine(
+          ocrEngine: _ocrEngine,
+          pdfRasterizer: _pdfRasterizer,
+        );
+    _piiRedactionEngine = piiRedactionEngine ??
+        PiiRedactionEngine(
+          ocrEngine: _ocrEngine,
+          faceDetectionEngine: _faceDetectionEngine,
+          pdfRasterizer: _pdfRasterizer,
+        );
+  }
 
   final FutureOr<TelemetrySnapshot> Function() _telemetryProvider;
   final OcrEngine _ocrEngine;
   final BarcodeEngine _barcodeEngine;
+  final FaceDetectionEngine _faceDetectionEngine;
+  final PdfRasterizer _pdfRasterizer;
+  late final SearchablePdfEngine _searchablePdfEngine;
+  late final PiiRedactionEngine _piiRedactionEngine;
   final WebAssetLoader? webAssetLoader;
   final String hostname;
 
@@ -44,8 +73,11 @@ class EdgeHttpServer {
 
   final StreamController<RequestLogEntry> _logController =
       StreamController<RequestLogEntry>.broadcast();
+  final StreamController<DocumentJobRecord> _documentJobController =
+      StreamController<DocumentJobRecord>.broadcast();
 
   Stream<RequestLogEntry> get requestLogs => _logController.stream;
+  Stream<DocumentJobRecord> get documentJobs => _documentJobController.stream;
 
   bool get isRunning => _server != null;
   int? get boundPort => _server?.port;
@@ -76,11 +108,21 @@ class EdgeHttpServer {
     );
     final ocrRoutes = OcrRoutes(ocrEngine: _ocrEngine);
     final barcodeRoutes = BarcodeRoutes(barcodeEngine: _barcodeEngine);
+    final documentRoutes = DocumentRoutes(
+      searchablePdfEngine: _searchablePdfEngine,
+      piiRedactionEngine: _piiRedactionEngine,
+      onJobCompleted: (job) {
+        if (!_documentJobController.isClosed) {
+          _documentJobController.add(job);
+        }
+      },
+    );
     final webUiRoutes = WebUiRoutes(assetLoader: webAssetLoader);
     rootRouter.mount("/", healthRoutes.router.call);
     rootRouter.mount("/", statusRoutes.router.call);
     rootRouter.mount("/", ocrRoutes.router.call);
     rootRouter.mount("/", barcodeRoutes.router.call);
+    rootRouter.mount("/", documentRoutes.router.call);
     rootRouter.mount("/", webUiRoutes.router.call);
 
     final handler = const Pipeline()
@@ -129,7 +171,10 @@ class EdgeHttpServer {
     await stop();
     await _ocrEngine.dispose();
     await _barcodeEngine.dispose();
+    await _faceDetectionEngine.dispose();
+    await _pdfRasterizer.dispose();
     await _logController.close();
+    await _documentJobController.close();
   }
 
   Middleware _requestLoggingMiddleware() {
