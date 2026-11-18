@@ -2,6 +2,8 @@ import "package:dynamic_color/dynamic_color.dart";
 import "package:flutter/material.dart";
 import "package:flutter_bloc/flutter_bloc.dart";
 
+import "blocs/ai_gateway/ai_gateway_cubit.dart";
+import "blocs/document_pipeline/document_pipeline_cubit.dart";
 import "blocs/request_log/request_log_bloc.dart";
 import "blocs/request_log/request_log_event.dart";
 import "blocs/server/server_bloc.dart";
@@ -90,6 +92,17 @@ class _DroidEdgeAppState extends State<DroidEdgeApp> {
         BlocProvider(
           create: (_) => RequestLogBloc(httpServer: _httpServer)
             ..add(const RequestLogStarted()),
+        ),
+        BlocProvider(
+          create: (_) =>
+              DocumentPipelineCubit(documentJobs: _httpServer.documentJobs)
+                ..start(),
+        ),
+        BlocProvider(
+          create: (_) => AiGatewayCubit(
+            openAiJobs: _httpServer.openAiJobs,
+            localGenAiEngine: _httpServer.localGenAiEngine,
+          )..start(),
         ),
       ],
       child: DynamicColorBuilder(

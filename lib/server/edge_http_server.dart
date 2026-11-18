@@ -7,12 +7,23 @@ import "package:shelf/shelf_io.dart" as shelf_io;
 import "package:shelf_router/shelf_router.dart";
 
 import "../engines/barcode_engine.dart";
+import "../engines/entity_extraction_engine.dart";
+import "../engines/face_detection_engine.dart";
+import "../engines/local_genai_engine.dart";
 import "../engines/ocr_engine.dart";
+import "../engines/pdf_rasterizer.dart";
+import "../engines/pii_redaction_engine.dart";
+import "../engines/searchable_pdf_engine.dart";
+import "../engines/vision_chat_pipeline.dart";
+import "../models/document_pipeline_models.dart";
+import "../models/openai_vision_models.dart";
 import "../models/request_log_entry.dart";
 import "../models/telemetry_snapshot.dart";
 import "routes/barcode_routes.dart";
+import "routes/document_routes.dart";
 import "routes/health_routes.dart";
 import "routes/ocr_routes.dart";
+import "routes/openai_routes.dart";
 import "routes/status_routes.dart";
 import "routes/web_ui_routes.dart";
 
@@ -25,16 +36,58 @@ class EdgeHttpServer {
     FutureOr<TelemetrySnapshot> Function()? telemetryProvider,
     OcrEngine? ocrEngine,
     BarcodeEngine? barcodeEngine,
+    FaceDetectionEngine? faceDetectionEngine,
+    PdfRasterizer? pdfRasterizer,
+    SearchablePdfEngine? searchablePdfEngine,
+    PiiRedactionEngine? piiRedactionEngine,
+    EntityExtractionEngine? entityExtractionEngine,
+    LocalGenAiEngine? localGenAiEngine,
+    VisionChatPipeline? visionChatPipeline,
     this.webAssetLoader,
     this.hostname = "android-edge.local",
   })  : _telemetryProvider = telemetryProvider ??
             (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc())),
         _ocrEngine = ocrEngine ?? MlKitOcrEngine(),
-        _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine();
+        _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine(),
+        _faceDetectionEngine =
+            faceDetectionEngine ?? MlKitFaceDetectionEngine(),
+        _pdfRasterizer = pdfRasterizer ?? PdfxDocumentRasterizer(),
+        _entityExtractionEngine =
+            entityExtractionEngine ?? HybridEntityExtractionEngine() {
+    _searchablePdfEngine = searchablePdfEngine ??
+        SearchablePdfEngine(
+          ocrEngine: _ocrEngine,
+          pdfRasterizer: _pdfRasterizer,
+        );
+    _piiRedactionEngine = piiRedactionEngine ??
+        PiiRedactionEngine(
+          ocrEngine: _ocrEngine,
+          faceDetectionEngine: _faceDetectionEngine,
+          pdfRasterizer: _pdfRasterizer,
+        );
+    _localGenAiEngine = localGenAiEngine ??
+        ThreeTierGenAiRuntime(
+          entityExtractionEngine: _entityExtractionEngine,
+        );
+    _visionChatPipeline = visionChatPipeline ??
+        VisionChatPipeline(
+          ocrEngine: _ocrEngine,
+          pdfRasterizer: _pdfRasterizer,
+          entityExtractionEngine: _entityExtractionEngine,
+          localGenAiEngine: _localGenAiEngine,
+        );
+  }
 
   final FutureOr<TelemetrySnapshot> Function() _telemetryProvider;
   final OcrEngine _ocrEngine;
   final BarcodeEngine _barcodeEngine;
+  final FaceDetectionEngine _faceDetectionEngine;
+  final PdfRasterizer _pdfRasterizer;
+  late final SearchablePdfEngine _searchablePdfEngine;
+  late final PiiRedactionEngine _piiRedactionEngine;
+  final EntityExtractionEngine _entityExtractionEngine;
+  late final LocalGenAiEngine _localGenAiEngine;
+  late final VisionChatPipeline _visionChatPipeline;
   final WebAssetLoader? webAssetLoader;
   final String hostname;
 
@@ -44,8 +97,15 @@ class EdgeHttpServer {
 
   final StreamController<RequestLogEntry> _logController =
       StreamController<RequestLogEntry>.broadcast();
+  final StreamController<DocumentJobRecord> _documentJobController =
+      StreamController<DocumentJobRecord>.broadcast();
+  final StreamController<OpenAiJobRecord> _openAiJobController =
+      StreamController<OpenAiJobRecord>.broadcast();
 
   Stream<RequestLogEntry> get requestLogs => _logController.stream;
+  Stream<DocumentJobRecord> get documentJobs => _documentJobController.stream;
+  Stream<OpenAiJobRecord> get openAiJobs => _openAiJobController.stream;
+  LocalGenAiEngine get localGenAiEngine => _localGenAiEngine;
 
   bool get isRunning => _server != null;
   int? get boundPort => _server?.port;
@@ -76,15 +136,36 @@ class EdgeHttpServer {
     );
     final ocrRoutes = OcrRoutes(ocrEngine: _ocrEngine);
     final barcodeRoutes = BarcodeRoutes(barcodeEngine: _barcodeEngine);
+    final documentRoutes = DocumentRoutes(
+      searchablePdfEngine: _searchablePdfEngine,
+      piiRedactionEngine: _piiRedactionEngine,
+      onJobCompleted: (job) {
+        if (!_documentJobController.isClosed) {
+          _documentJobController.add(job);
+        }
+      },
+    );
+    final openAiRoutes = OpenAiRoutes(
+      visionChatPipeline: _visionChatPipeline,
+      localGenAiEngine: _localGenAiEngine,
+      onJobCompleted: (job) {
+        if (!_openAiJobController.isClosed) {
+          _openAiJobController.add(job);
+        }
+      },
+    );
     final webUiRoutes = WebUiRoutes(assetLoader: webAssetLoader);
     rootRouter.mount("/", healthRoutes.router.call);
     rootRouter.mount("/", statusRoutes.router.call);
     rootRouter.mount("/", ocrRoutes.router.call);
     rootRouter.mount("/", barcodeRoutes.router.call);
+    rootRouter.mount("/", documentRoutes.router.call);
+    rootRouter.mount("/", openAiRoutes.router.call);
     rootRouter.mount("/", webUiRoutes.router.call);
 
     final handler = const Pipeline()
         .addMiddleware(_requestLoggingMiddleware())
+        .addMiddleware(_corsMiddleware())
         .addHandler((Request request) async {
       final response = await rootRouter.call(request);
       if (response.statusCode == 404 &&
@@ -129,7 +210,32 @@ class EdgeHttpServer {
     await stop();
     await _ocrEngine.dispose();
     await _barcodeEngine.dispose();
+    await _faceDetectionEngine.dispose();
+    await _pdfRasterizer.dispose();
+    await _entityExtractionEngine.dispose();
+    await _localGenAiEngine.dispose();
     await _logController.close();
+    await _documentJobController.close();
+    await _openAiJobController.close();
+  }
+
+  static const Map<String, String> _corsHeaders = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers":
+        "Content-Type, Authorization, X-Requested-With",
+  };
+
+  Middleware _corsMiddleware() {
+    return (Handler innerHandler) {
+      return (Request request) async {
+        if (request.method == "OPTIONS") {
+          return Response.ok("", headers: _corsHeaders);
+        }
+        final response = await innerHandler(request);
+        return response.change(headers: _corsHeaders);
+      };
+    };
   }
 
   Middleware _requestLoggingMiddleware() {

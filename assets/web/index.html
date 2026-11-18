@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Droid Edge Server — Local OCR &amp; Vision Console</title>
+  <title>Droid Edge Server — Local OCR &amp; Document Console</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -13,10 +13,10 @@
         <div class="brand-badge" aria-hidden="true">DE</div>
         <div>
           <h1>Droid Edge Server</h1>
-          <p class="subtitle">100% Offline LAN OCR &amp; Barcode Console</p>
+          <p class="subtitle">100% Offline LAN OCR, Document PDF &amp; PII Redaction Console</p>
         </div>
       </div>
-      <div class="server-pill" id="serverStatusPill" title="Live device status">
+      <div class="server-pill" id="serverStatusPill" aria-live="polite">
         <span class="dot" id="serverStatusDot"></span>
         <span id="serverStatusText">Connecting…</span>
       </div>
@@ -34,10 +34,19 @@
           <button type="button" class="mode-btn" data-mode="barcode" role="tab" aria-selected="false">
             Barcode Scan
           </button>
+          <button type="button" class="mode-btn" data-mode="pdf" role="tab" aria-selected="false">
+            Searchable PDF
+          </button>
+          <button type="button" class="mode-btn" data-mode="redact" role="tab" aria-selected="false">
+            PII Redact
+          </button>
+          <button type="button" class="mode-btn" data-mode="ai" role="tab" aria-selected="false">
+            AI Extract
+          </button>
         </div>
 
         <div class="right-controls">
-          <label class="script-picker" id="scriptPickerWrap">
+          <label class="script-picker" id="scriptPickerWrap" for="scriptSelect">
             <span>Script</span>
             <select id="scriptSelect" aria-label="OCR Script">
               <option value="latin" selected>Latin</option>
@@ -47,9 +56,100 @@
               <option value="korean">Korean</option>
             </select>
           </label>
+          <button type="button" class="btn-primary hidden" id="downloadBatchZipBtn" disabled>
+            Download Batch .zip
+          </button>
           <button type="button" class="btn-secondary" id="clearBatchBtn" disabled>
             Clear
           </button>
+        </div>
+      </section>
+
+      <section class="doc-controls-bar hidden" id="docControlsBar" aria-label="Document pipeline options">
+        <div class="doc-controls-group hidden" id="pdfControlsGroup">
+          <label class="inline-field" for="pdfPageFormatSelect">
+            <span>Page Size</span>
+            <select id="pdfPageFormatSelect" class="mini-select">
+              <option value="a4" selected>A4</option>
+              <option value="letter">Letter</option>
+              <option value="original">Original</option>
+            </select>
+          </label>
+          <label class="inline-field" for="pdfMaxSizeSelect">
+            <span>Max File Size</span>
+            <select id="pdfMaxSizeSelect" class="mini-select">
+              <option value="" selected>No limit</option>
+              <option value="0.5">0.5 MB</option>
+              <option value="1">1.0 MB</option>
+              <option value="2">2.0 MB</option>
+              <option value="5">5.0 MB</option>
+            </select>
+          </label>
+          <label class="check-chip" for="pdfEnhanceToggle">
+            <input type="checkbox" id="pdfEnhanceToggle" checked>
+            <span>Contrast Cleanup</span>
+          </label>
+        </div>
+
+        <div class="doc-controls-group hidden" id="redactControlsGroup">
+          <span class="group-label">Mask Presets</span>
+          <label class="check-chip" for="presetIds">
+            <input type="checkbox" id="presetIds" data-preset="ids" checked>
+            <span>IDs, Aadhaar &amp; PAN</span>
+          </label>
+          <label class="check-chip" for="presetContacts">
+            <input type="checkbox" id="presetContacts" data-preset="contacts" checked>
+            <span>Phones, Emails &amp; UPI</span>
+          </label>
+          <label class="check-chip" for="presetAddresses">
+            <input type="checkbox" id="presetAddresses" data-preset="addresses" checked>
+            <span>Addresses &amp; PIN</span>
+          </label>
+          <label class="check-chip" for="presetFaces">
+            <input type="checkbox" id="presetFaces" data-preset="faces" checked>
+            <span>Faces</span>
+          </label>
+          <span class="toolbar-divider" aria-hidden="true"></span>
+          <label class="check-chip" for="keepLast4Toggle">
+            <input type="checkbox" id="keepLast4Toggle">
+            <span>Keep Last 4 (Masked Aadhaar)</span>
+          </label>
+          <label class="check-chip" for="redactEnhanceToggle">
+            <input type="checkbox" id="redactEnhanceToggle">
+            <span>Contrast Cleanup</span>
+          </label>
+          <label class="inline-field" for="redactDownloadFormat">
+            <span>Export</span>
+            <select id="redactDownloadFormat" class="mini-select">
+              <option value="image" selected>Sanitized PNG</option>
+              <option value="pdf">Sanitized PDF</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="doc-controls-group hidden" id="aiControlsGroup">
+          <label class="inline-field" for="aiTaskSelect">
+            <span>Extract</span>
+            <select id="aiTaskSelect" class="mini-select">
+              <option value="table" selected>Table → Markdown (.md)</option>
+              <option value="receipt">Receipt / Bill → JSON (.json)</option>
+              <option value="vcard">Business Card → vCard (.vcf)</option>
+              <option value="ocr">General Vision OCR</option>
+              <option value="custom">Custom Prompt</option>
+            </select>
+          </label>
+          <input
+            type="text"
+            id="aiPromptInput"
+            class="mini-input hidden"
+            placeholder="Custom OpenAI vision prompt…"
+            aria-label="Custom OpenAI prompt"
+          >
+          <label class="check-chip" for="aiJsonModeToggle">
+            <input type="checkbox" id="aiJsonModeToggle">
+            <span>JSON Mode</span>
+          </label>
+          <button type="button" class="btn-secondary hidden" id="aiRunBtn">Run Prompt</button>
         </div>
       </section>
 
@@ -58,19 +158,19 @@
         id="dropZone"
         tabindex="0"
         role="button"
-        aria-label="Drop images here, click to browse, or paste from clipboard"
+        aria-label="Drop images or PDFs here, click to browse, or paste from clipboard"
       >
         <input
           type="file"
           id="fileInput"
-          accept="image/*"
+          accept="image/*,application/pdf,.pdf"
           multiple
           hidden
         >
         <div class="drop-zone-inner">
           <div class="drop-icon" aria-hidden="true">⇪</div>
-          <p class="drop-title">Drop images here, click to browse, or press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste</p>
-          <p class="drop-hint">Supports single or batch images (JPEG, PNG, WebP). Processed locally on-device.</p>
+          <p class="drop-title">Drop images or PDFs here, click to browse, or press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste</p>
+          <p class="drop-hint">Supports single or batch images (JPEG, PNG, WebP) and scanned PDFs. Processed sequentially on-device.</p>
         </div>
       </section>
 
@@ -80,11 +180,16 @@
         <div class="pane pane-left">
           <div class="pane-header">
             <div class="pane-title-group">
-              <h2>Image &amp; Bounding Boxes</h2>
+              <h2 id="previewHeading">Image &amp; Bounding Boxes</h2>
               <span class="meta-chip hidden" id="dimensionsChip"></span>
             </div>
             <div class="pane-actions">
-              <label class="toggle-chip" title="Toggle bounding box overlay">
+              <div class="segmented-control hidden" id="compareSwitchGroup" role="group" aria-label="Comparison view">
+                <button type="button" class="seg-btn active" data-compare="after" aria-pressed="true">After</button>
+                <button type="button" class="seg-btn" data-compare="before" aria-pressed="false">Before</button>
+                <button type="button" class="seg-btn" data-compare="split" aria-pressed="false">Split</button>
+              </div>
+              <label class="toggle-chip" id="overlayToggleWrap" for="overlayToggle">
                 <input type="checkbox" id="overlayToggle" checked>
                 <span>Overlays</span>
               </label>
@@ -97,18 +202,40 @@
 
           <div class="image-stage" id="imageStage">
             <div class="empty-state" id="imageEmptyState">
-              No image selected yet. Drop or paste an image above to inspect bounding-box overlays.
+              No file selected yet. Drop or paste an image or PDF above to inspect previews and overlays.
+            </div>
+            <div class="pdf-pending-state hidden" id="pdfPendingState">
+              <div class="pdf-badge" aria-hidden="true">PDF</div>
+              <p class="pdf-pending-title" id="pdfPendingTitle">PDF queued for on-device processing</p>
+              <p class="pdf-pending-hint" id="pdfPendingHint">Page preview will appear once processing completes.</p>
             </div>
             <div class="canvas-wrapper hidden" id="canvasWrapper">
-              <img id="previewImage" alt="Uploaded preview">
+              <img id="previewImage" alt="Processed document preview">
+              <img id="beforeCompareImage" class="compare-before-img hidden" alt="Original document before processing">
+              <div id="compareDivider" class="compare-divider hidden" aria-hidden="true"></div>
               <svg id="overlaySvg" class="overlay-svg" preserveAspectRatio="none"></svg>
             </div>
           </div>
+
+          <div class="compare-slider-bar hidden" id="compareSliderBar">
+            <label for="compareSlider" class="compare-slider-label">Before</label>
+            <input
+              type="range"
+              id="compareSlider"
+              min="0"
+              max="100"
+              value="50"
+              aria-valuetext="50% split comparison"
+            >
+            <span class="compare-slider-label" aria-hidden="true">After</span>
+            <span class="compare-slider-readout" id="compareReadout">50%</span>
+          </div>
+
           <div class="box-inspector" id="hoverInspector">
             <span class="box-inspector-tag" id="inspectorTag">Region</span>
             <span class="box-inspector-text muted" id="inspectorText">Hover or click a bounding box to inspect or copy</span>
             <button type="button" class="btn-secondary btn-xs hidden" id="copyBoxBtn">Copy Region</button>
-            <button type="button" class="btn-secondary btn-xs hidden" id="clearBoxBtn" title="Clear selection">×</button>
+            <button type="button" class="btn-secondary btn-xs hidden" id="clearBoxBtn" aria-label="Clear selection">×</button>
           </div>
         </div>
 
@@ -129,6 +256,7 @@
             <div class="empty-state" id="outputEmptyState">
               Results will appear here after processing.
             </div>
+            <div class="doc-summary-card hidden" id="docSummaryCard"></div>
             <div class="raw-text-lines hidden" id="rawTextLines"></div>
             <div class="barcode-cards hidden" id="barcodeCards"></div>
             <pre class="output-pre hidden" id="outputPre"></pre>
@@ -141,4 +269,3 @@
   <script src="/app.js"></script>
 </body>
 </html>
-
