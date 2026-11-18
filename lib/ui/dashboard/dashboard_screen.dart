@@ -1,6 +1,8 @@
 import "package:flutter/material.dart";
 import "package:flutter_bloc/flutter_bloc.dart";
 
+import "../../blocs/ai_gateway/ai_gateway_cubit.dart";
+import "../../blocs/ai_gateway/ai_gateway_state.dart";
 import "../../blocs/document_pipeline/document_pipeline_cubit.dart";
 import "../../blocs/document_pipeline/document_pipeline_state.dart";
 import "../../blocs/request_log/request_log_bloc.dart";
@@ -11,6 +13,7 @@ import "../../blocs/server/server_event.dart";
 import "../../blocs/server/server_state.dart";
 import "../../blocs/telemetry/telemetry_cubit.dart";
 import "../../blocs/telemetry/telemetry_state.dart";
+import "widgets/ai_gateway_card.dart";
 import "widgets/document_pipeline_card.dart";
 import "widgets/network_qr_card.dart";
 import "widgets/request_log_list.dart";
@@ -75,9 +78,11 @@ class DashboardScreen extends StatelessWidget {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
-            child: ListView(
+            child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
-              children: [
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 BlocBuilder<ServerBloc, ServerState>(
                   builder: (context, serverState) {
                     return Column(
@@ -133,6 +138,28 @@ class DashboardScreen extends StatelessWidget {
                   },
                 ),
                 const SizedBox(height: 16),
+                BlocBuilder<ServerBloc, ServerState>(
+                  builder: (context, serverState) {
+                    return BlocBuilder<AiGatewayCubit, AiGatewayState>(
+                      builder: (context, aiState) {
+                        return AiGatewayCard(
+                          state: aiState,
+                          serverState: serverState,
+                          onRefreshCapabilities: () => context
+                              .read<AiGatewayCubit>()
+                              .refreshCapabilities(),
+                          onToggleTier2: (enabled) => context
+                              .read<AiGatewayCubit>()
+                              .toggleTier2(enabled),
+                          onClearHistory: () => context
+                              .read<AiGatewayCubit>()
+                              .clearHistory(),
+                        );
+                      },
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
                 BlocBuilder<RequestLogBloc, RequestLogState>(
                   builder: (context, logState) {
                     return RequestLogList(
@@ -148,6 +175,7 @@ class DashboardScreen extends StatelessWidget {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }
