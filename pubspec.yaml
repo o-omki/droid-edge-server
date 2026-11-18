@@ -68,6 +68,10 @@ dependencies:
   google_mlkit_face_detection: ^1.0.3
   archive: ^4.7.1
 
+  # Phase 6: OpenAI Vision Gateway, Entity Extraction & Optional On-Device GenAI
+  google_mlkit_entity_extraction: ^1.0.3
+  google_mlkit_genai_prompt: ^0.4.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

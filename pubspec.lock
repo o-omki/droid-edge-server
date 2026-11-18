@@ -317,6 +317,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.3"
+  google_mlkit_entity_extraction:
+    dependency: "direct main"
+    description:
+      name: google_mlkit_entity_extraction
+      sha256: "79865d558596a4bcc57f7dcc3b26daff3e6c9e5cf12d00d4551227c873a43c7e"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
   google_mlkit_face_detection:
     dependency: "direct main"
     description:
@@ -325,6 +333,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.3"
+  google_mlkit_genai_prompt:
+    dependency: "direct main"
+    description:
+      name: google_mlkit_genai_prompt
+      sha256: "57c3f1b39eeb5c1a2c144140b26e2bed68abffc44a77a47475e31baf668a9cfd"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.2"
   google_mlkit_text_recognition:
     dependency: "direct main"
     description:
