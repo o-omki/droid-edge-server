@@ -2,7 +2,7 @@
   "use strict";
 
   const state = {
-    mode: "raw", // "raw" | "json" | "barcode" | "pdf" | "redact"
+    mode: "raw", // "raw" | "json" | "barcode" | "pdf" | "redact" | "ai"
     script: "latin",
     showOverlays: true,
     overlayLevel: "lines", // "blocks" | "lines"
@@ -19,12 +19,18 @@
       enhance: false,
       outputFormat: "image",
     },
+    aiOptions: {
+      task: "table", // "table" | "receipt" | "vcard" | "ocr" | "custom"
+      customPrompt: "",
+      jsonMode: false,
+    },
     batch: [],
     activeId: null,
     selectedBoxId: null,
     selectedBoxText: "",
     queue: [],
     isQueueRunning: false,
+    processingKey: null,
   };
 
   const els = {
@@ -47,6 +53,11 @@
     keepLast4Toggle: document.getElementById("keepLast4Toggle"),
     redactEnhanceToggle: document.getElementById("redactEnhanceToggle"),
     redactDownloadFormat: document.getElementById("redactDownloadFormat"),
+    aiControlsGroup: document.getElementById("aiControlsGroup"),
+    aiTaskSelect: document.getElementById("aiTaskSelect"),
+    aiPromptInput: document.getElementById("aiPromptInput"),
+    aiJsonModeToggle: document.getElementById("aiJsonModeToggle"),
+    aiRunBtn: document.getElementById("aiRunBtn"),
     dropZone: document.getElementById("dropZone"),
     fileInput: document.getElementById("fileInput"),
     batchStrip: document.getElementById("batchStrip"),
@@ -71,6 +82,7 @@
     compareSliderBar: document.getElementById("compareSliderBar"),
     compareSlider: document.getElementById("compareSlider"),
     compareReadout: document.getElementById("compareReadout"),
+    hoverInspector: document.getElementById("hoverInspector"),
     inspectorTag: document.getElementById("inspectorTag"),
     inspectorText: document.getElementById("inspectorText"),
     copyBoxBtn: document.getElementById("copyBoxBtn"),
@@ -105,11 +117,16 @@
     return mode === "pdf" || mode === "redact";
   }
 
+  function supportsPdfInput(mode = state.mode) {
+    return isDocMode(mode) || mode === "ai";
+  }
+
   function itemHasResultForMode(item, mode = state.mode) {
     if (!item) return false;
     if (mode === "barcode") return Boolean(item.barcodeData);
     if (mode === "pdf") return Boolean(item.pdfData);
     if (mode === "redact") return Boolean(item.redactData);
+    if (mode === "ai") return Boolean(item.aiData);
     return Boolean(item.ocrData);
   }
 
@@ -203,19 +220,28 @@
     const isBarcode = mode === "barcode";
     const isPdf = mode === "pdf";
     const isRedact = mode === "redact";
+    const isAi = mode === "ai";
     const inDocMode = isPdf || isRedact;
 
     els.scriptPickerWrap.classList.toggle("hidden", isBarcode);
-    els.overlayToggleWrap.classList.toggle("hidden", isPdf);
+    els.overlayToggleWrap.classList.toggle("hidden", isPdf || isAi);
     els.overlayLevelSelect.classList.toggle(
       "hidden",
-      isBarcode || isPdf || isRedact
+      isBarcode || isPdf || isRedact || isAi
     );
 
-    els.docControlsBar.classList.toggle("hidden", !inDocMode);
+    els.docControlsBar.classList.toggle("hidden", !inDocMode && !isAi);
     els.pdfControlsGroup.classList.toggle("hidden", !isPdf);
     els.redactControlsGroup.classList.toggle("hidden", !isRedact);
+    els.aiControlsGroup.classList.toggle("hidden", !isAi);
     els.downloadBatchZipBtn.classList.toggle("hidden", !inDocMode);
+
+    const isCustomAi = isAi && state.aiOptions.task === "custom";
+    els.aiPromptInput.classList.toggle("hidden", !isCustomAi);
+    els.aiRunBtn.classList.toggle("hidden", !isCustomAi);
+    if (els.hoverInspector) {
+      els.hoverInspector.classList.toggle("hidden", isPdf || isAi);
+    }
 
     if (mode === "raw") {
       els.previewHeading.textContent = "Image & Bounding Boxes";
@@ -229,9 +255,12 @@
     } else if (mode === "pdf") {
       els.previewHeading.textContent = "Page Cleanup & Preview";
       els.outputHeading.textContent = "Searchable PDF Output";
-    } else {
+    } else if (mode === "redact") {
       els.previewHeading.textContent = "Before / After Redaction";
       els.outputHeading.textContent = "PII Redaction Audit";
+    } else {
+      els.previewHeading.textContent = "Input Document";
+      els.outputHeading.textContent = "OpenAI Vision Output";
     }
 
     updateBatchZipButton();
@@ -248,6 +277,7 @@
   }
 
   function setMode(nextMode) {
+    if (state.mode === nextMode) return;
     state.mode = nextMode;
     clearBoxSelection();
 
@@ -322,7 +352,7 @@
     if (validFiles.length === 0) return;
 
     const allDroppedArePdfs = validFiles.every((f) => isPdfFile(f));
-    if (allDroppedArePdfs && !isDocMode(state.mode)) {
+    if (allDroppedArePdfs && !supportsPdfInput(state.mode)) {
       setMode("pdf");
     }
 
@@ -338,6 +368,7 @@
         barcodeData: null,
         pdfData: null,
         redactData: null,
+        aiData: null,
         error: null,
       };
     });
@@ -362,6 +393,8 @@
 
   function enqueueItem(item) {
     if (!item) return;
+    const key = `${item.id}:${state.mode}`;
+    if (state.processingKey === key) return;
     if (!state.queue.includes(item.id)) {
       item.status = "queued";
       item.error = null;
@@ -416,9 +449,54 @@
     }
   }
 
+  function fileToDataUri(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () =>
+        reject(new Error("Failed to read file as base64 data URI."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function buildAiRequestSpec() {
+    const task = state.aiOptions.task;
+    if (task === "table") {
+      return {
+        model: "local-table",
+        prompt: "Extract any table in this document as clean Markdown.",
+      };
+    }
+    if (task === "receipt") {
+      return {
+        model: "local-structured",
+        prompt:
+          "Parse this receipt or invoice into structured JSON fields and line items.",
+      };
+    }
+    if (task === "vcard") {
+      return {
+        model: "local-vcard",
+        prompt: "Extract business card contact information as a vCard.",
+      };
+    }
+    if (task === "custom") {
+      return {
+        model: "local-edge-vision",
+        prompt:
+          state.aiOptions.customPrompt.trim() ||
+          "Extract all readable text cleanly.",
+      };
+    }
+    return {
+      model: "local-ocr",
+      prompt: "Extract all readable text cleanly.",
+    };
+  }
+
   async function processItem(item) {
     const mode = state.mode;
-    if (item.isPdf && !isDocMode(mode)) {
+    if (item.isPdf && !supportsPdfInput(mode)) {
       item.status = "done";
       item.error = null;
       renderBatchStrip();
@@ -436,8 +514,60 @@
 
     item.status = "processing";
     item.error = null;
+    state.processingKey = `${item.id}:${mode}`;
     renderBatchStrip();
     if (item.id === state.activeId) renderActiveItem();
+
+    if (mode === "ai") {
+      try {
+        const dataUri = await fileToDataUri(item.file);
+        const spec = buildAiRequestSpec();
+        const requestBody = {
+          model: spec.model,
+          script: state.script,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: spec.prompt },
+                { type: "image_url", image_url: { url: dataUri } },
+              ],
+            },
+          ],
+        };
+        if (state.aiOptions.jsonMode) {
+          requestBody.response_format = { type: "json_object" };
+        }
+
+        const response = await fetch("/v1/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          const errMsg =
+            (payload.error && payload.error.message) ||
+            payload.message ||
+            payload.error ||
+            `HTTP ${response.status}`;
+          throw new Error(String(errMsg));
+        }
+
+        item.aiData = payload;
+        item.status = "done";
+      } catch (err) {
+        item.status = "error";
+        item.error = err instanceof Error ? err.message : String(err);
+      }
+
+      renderBatchStrip();
+      if (item.id === state.activeId) {
+        renderActiveItem();
+      }
+      state.processingKey = null;
+      return;
+    }
 
     const formData = new FormData();
     const fieldName = isDocMode(mode) ? "file" : "image";
@@ -496,6 +626,8 @@
     } catch (err) {
       item.status = "error";
       item.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      state.processingKey = null;
     }
 
     renderBatchStrip();
@@ -678,10 +810,12 @@
       els.pdfPendingState.classList.remove("hidden");
       els.pdfPendingTitle.textContent = item.file.name || "PDF Document";
       els.pdfPendingHint.textContent =
-        !isDocMode(state.mode)
-          ? "Switch to Searchable PDF or PII Redact mode to process PDF files."
+        !supportsPdfInput(state.mode)
+          ? "Switch to Searchable PDF, PII Redact, or AI Extract mode to process PDF files."
           : item.error
           ? `Processing error: ${item.error}`
+          : item.status === "done"
+          ? "PDF processed via OpenAI /v1/chat/completions (raster preview omitted in OpenAI JSON)."
           : "Rasterising and running on-device OCR…";
       els.dimensionsChip.classList.add("hidden");
     } else {
@@ -755,7 +889,7 @@
       return boxes;
     }
 
-    if (state.mode === "pdf") {
+    if (state.mode === "pdf" || state.mode === "ai") {
       return [];
     }
 
@@ -832,6 +966,8 @@
         ? item.redactData
         : state.mode === "pdf"
         ? item.pdfData
+        : state.mode === "ai"
+        ? item.aiData
         : item.ocrData;
 
     let width = (data && data.image_width) || els.previewImage.naturalWidth || 0;
@@ -902,6 +1038,14 @@
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }
 
+  function getAiOutputContent(aiData) {
+    if (!aiData || !Array.isArray(aiData.choices) || aiData.choices.length === 0) {
+      return "";
+    }
+    const msg = aiData.choices[0].message;
+    return (msg && typeof msg.content === "string") ? msg.content : "";
+  }
+
   function getOutputText(item) {
     if (!item || item.error) return item ? `Error: ${item.error}` : "";
     if (state.mode === "barcode") {
@@ -912,6 +1056,9 @@
     }
     if (state.mode === "redact") {
       return item.redactData ? item.redactData.sanitized_text || "" : "";
+    }
+    if (state.mode === "ai") {
+      return getAiOutputContent(item.aiData);
     }
     if (!item.ocrData) return "";
     if (state.mode === "raw") {
@@ -935,9 +1082,9 @@
     els.downloadBtn.disabled = true;
     els.downloadBtn.textContent = "Download";
 
-    if (item.isPdf && !isDocMode(state.mode)) {
+    if (item.isPdf && !supportsPdfInput(state.mode)) {
       els.outputEmptyState.textContent =
-        "PDF files are processed in Searchable PDF or PII Redact mode.";
+        "PDF files are processed in Searchable PDF, PII Redact, or AI Extract mode.";
       els.outputEmptyState.classList.remove("hidden");
       return;
     }
@@ -1195,6 +1342,75 @@
       return;
     }
 
+    if (state.mode === "ai") {
+      const data = item.aiData;
+      if (!data) return;
+
+      const content = getAiOutputContent(data);
+      const meta = data.x_edge_metadata || {};
+      const usage = data.usage || {};
+      const intent = String(meta.intent || "ocr").toUpperCase();
+      const tier = String(meta.tier_used || "tier1_deterministic");
+      const ms = typeof meta.processing_ms === "number" ? meta.processing_ms : 0;
+
+      els.latencyChip.textContent = `${ms} ms`;
+      els.latencyChip.classList.remove("hidden");
+      els.summaryChip.textContent = `${intent} · ${usage.completion_tokens || 0} tok`;
+      els.summaryChip.classList.remove("hidden");
+
+      const fallbackBadge = meta.fallback_triggered
+        ? `<span class="status-badge">Tier 1 Fallback</span>`
+        : "";
+      const jsonBadge =
+        state.aiOptions.jsonMode || meta.intent === "receipt"
+          ? `<span class="status-badge success">Valid JSON</span>`
+          : "";
+
+      els.docSummaryCard.innerHTML = `
+        <div class="doc-summary-grid">
+          <div class="doc-metric">
+            <span class="doc-metric-label">Intent</span>
+            <span class="doc-metric-value">${escapeHtml(intent)}</span>
+          </div>
+          <div class="doc-metric">
+            <span class="doc-metric-label">Tier</span>
+            <span class="doc-metric-value">${escapeHtml(tier)}</span>
+          </div>
+          <div class="doc-metric">
+            <span class="doc-metric-label">Prompt / Completion</span>
+            <span class="doc-metric-value">${usage.prompt_tokens || 0} / ${
+        usage.completion_tokens || 0
+      }</span>
+          </div>
+          <div class="doc-metric">
+            <span class="doc-metric-label">Model</span>
+            <span class="doc-metric-value">${escapeHtml(data.model || "local-edge-vision")}</span>
+          </div>
+        </div>
+        <div class="doc-badges-row">
+          <span class="status-badge success">OpenAI /v1/chat/completions</span>
+          ${jsonBadge}
+          ${fallbackBadge}
+        </div>
+      `;
+      els.docSummaryCard.classList.remove("hidden");
+
+      els.outputPre.textContent =
+        content.length > 0 ? content : "(No content returned)";
+      els.outputPre.classList.remove("hidden");
+      els.copyBtn.disabled = content.length === 0;
+      els.downloadBtn.disabled = content.length === 0;
+      els.downloadBtn.textContent =
+        meta.intent === "vcard" && !state.aiOptions.jsonMode
+          ? "Download .vcf"
+          : meta.intent === "table" && !state.aiOptions.jsonMode
+          ? "Download .md"
+          : state.aiOptions.jsonMode || meta.intent === "receipt"
+          ? "Download .json"
+          : "Download .txt";
+      return;
+    }
+
     const data = item.ocrData;
     if (!data) return;
 
@@ -1418,6 +1634,7 @@
       item.ocrData = null;
       item.pdfData = null;
       item.redactData = null;
+      item.aiData = null;
     });
     if (state.mode !== "barcode" && state.batch.length > 0) {
       enqueueAllBatchItems(true);
@@ -1466,6 +1683,32 @@
       renderOutput(active);
     }
   });
+
+  function onAiOptionsChanged() {
+    state.aiOptions.task = els.aiTaskSelect.value;
+    state.aiOptions.customPrompt = els.aiPromptInput.value;
+    state.aiOptions.jsonMode = els.aiJsonModeToggle.checked;
+    updateToolbarVisibility();
+    state.batch.forEach((item) => {
+      item.aiData = null;
+    });
+    if (state.mode === "ai" && state.batch.length > 0) {
+      enqueueAllBatchItems(true);
+    }
+  }
+
+  els.aiTaskSelect.addEventListener("change", onAiOptionsChanged);
+  els.aiJsonModeToggle.addEventListener("change", onAiOptionsChanged);
+  els.aiPromptInput.addEventListener("input", (e) => {
+    state.aiOptions.customPrompt = e.target.value;
+  });
+  els.aiPromptInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onAiOptionsChanged();
+    }
+  });
+  els.aiRunBtn.addEventListener("click", onAiOptionsChanged);
 
   els.compareBtns.forEach((btn) => {
     btn.addEventListener("click", () => setCompareView(btn.dataset.compare));
@@ -1630,6 +1873,26 @@
 
     const text = getOutputText(item);
     if (!text) return;
+
+    if (state.mode === "ai" && item.aiData) {
+      const intent = (item.aiData.x_edge_metadata && item.aiData.x_edge_metadata.intent) || "ocr";
+      let aiExt = "txt";
+      let aiMime = "text/plain";
+      if (state.aiOptions.jsonMode || intent === "receipt") {
+        aiExt = "json";
+        aiMime = "application/json";
+      } else if (intent === "table") {
+        aiExt = "md";
+        aiMime = "text/markdown";
+      } else if (intent === "vcard") {
+        aiExt = "vcf";
+        aiMime = "text/vcard";
+      }
+      const aiBlob = new Blob([text], { type: `${aiMime};charset=utf-8` });
+      triggerBlobDownload(aiBlob, `${baseName}.${aiExt}`);
+      return;
+    }
+
     const ext = state.mode === "raw" ? "txt" : "json";
     const mimeType = state.mode === "raw" ? "text/plain" : "application/json";
     const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });

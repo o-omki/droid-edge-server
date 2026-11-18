@@ -225,15 +225,6 @@ html, body {
   color: var(--on-primary);
 }
 
-.mode-btn[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  inset: auto 22% 3px;
-  border-block-end: 2px solid currentColor;
-  border-radius: 999px;
-  opacity: 0.7;
-}
-
 .right-controls {
   display: flex;
   align-items: center;
@@ -256,7 +247,8 @@ html, body {
 }
 
 .script-picker select,
-.mini-select {
+.mini-select,
+.mini-input {
   background: var(--surface-elevated);
   color: var(--text);
   border: 1px solid var(--border);
@@ -265,6 +257,12 @@ html, body {
   min-block-size: 28px;
   font: inherit;
   font-size: 0.82rem;
+}
+
+.mini-input {
+  min-width: 220px;
+  flex: 1 1 220px;
+  max-width: 420px;
 }
 
 .btn-primary,
@@ -387,7 +385,7 @@ html, body {
 .drop-zone.compact .drop-zone-inner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px 12px;
   flex-wrap: wrap;
 }
 
@@ -401,7 +399,7 @@ html, body {
 }
 
 .drop-zone.compact .drop-hint {
-  margin: 0 0 0 auto;
+  margin: 0;
   font-size: 0.77rem;
 }
 
@@ -954,11 +952,12 @@ input[type="range"]#compareSlider:focus-visible {
 
 .doc-summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
 }
 
 .doc-metric {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -973,9 +972,10 @@ input[type="range"]#compareSlider:focus-visible {
 
 .doc-metric-value {
   display: block;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 650;
   font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .doc-badges-row {

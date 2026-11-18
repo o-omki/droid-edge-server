@@ -40,6 +40,9 @@
           <button type="button" class="mode-btn" data-mode="redact" role="tab" aria-selected="false">
             PII Redact
           </button>
+          <button type="button" class="mode-btn" data-mode="ai" role="tab" aria-selected="false">
+            AI Extract
+          </button>
         </div>
 
         <div class="right-controls">
@@ -122,6 +125,31 @@
               <option value="pdf">Sanitized PDF</option>
             </select>
           </label>
+        </div>
+
+        <div class="doc-controls-group hidden" id="aiControlsGroup">
+          <label class="inline-field" for="aiTaskSelect">
+            <span>Extract</span>
+            <select id="aiTaskSelect" class="mini-select">
+              <option value="table" selected>Table → Markdown (.md)</option>
+              <option value="receipt">Receipt / Bill → JSON (.json)</option>
+              <option value="vcard">Business Card → vCard (.vcf)</option>
+              <option value="ocr">General Vision OCR</option>
+              <option value="custom">Custom Prompt</option>
+            </select>
+          </label>
+          <input
+            type="text"
+            id="aiPromptInput"
+            class="mini-input hidden"
+            placeholder="Custom OpenAI vision prompt…"
+            aria-label="Custom OpenAI prompt"
+          >
+          <label class="check-chip" for="aiJsonModeToggle">
+            <input type="checkbox" id="aiJsonModeToggle">
+            <span>JSON Mode</span>
+          </label>
+          <button type="button" class="btn-secondary hidden" id="aiRunBtn">Run Prompt</button>
         </div>
       </section>
 
