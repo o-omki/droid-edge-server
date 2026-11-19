@@ -242,6 +242,7 @@ class DocumentImageUtils {
               displayText: token,
               widthReferenceText: cleanText,
               box: box,
+              cornerPoints: element.cornerPoints,
               imgWidth: imgWidth,
               imgHeight: imgHeight,
               drawX: drawX,
@@ -261,6 +262,7 @@ class DocumentImageUtils {
             displayText: cleanText,
             widthReferenceText: cleanText,
             box: box,
+            cornerPoints: line.cornerPoints,
             imgWidth: imgWidth,
             imgHeight: imgHeight,
             drawX: drawX,
@@ -294,6 +296,7 @@ class DocumentImageUtils {
     required String displayText,
     required String widthReferenceText,
     required BoundingBoxRect box,
+    required List<CornerPoint> cornerPoints,
     required int imgWidth,
     required int imgHeight,
     required double drawX,
@@ -301,6 +304,54 @@ class DocumentImageUtils {
     required double scaleX,
     required double scaleY,
   }) {
+    if (cornerPoints.length == 4) {
+      final p0x = drawX + cornerPoints[0].x * scaleX;
+      final p0y = drawY + (imgHeight - cornerPoints[0].y) * scaleY;
+      final p1x = drawX + cornerPoints[1].x * scaleX;
+      final p1y = drawY + (imgHeight - cornerPoints[1].y) * scaleY;
+      final p3x = drawX + cornerPoints[3].x * scaleX;
+      final p3y = drawY + (imgHeight - cornerPoints[3].y) * scaleY;
+
+      final dx = p1x - p0x;
+      final dy = p1y - p0y;
+      final angle = math.atan2(dy, dx);
+      if (angle.abs() >= 0.01) {
+        final pdfWidth = math.max(1.0, math.sqrt(dx * dx + dy * dy));
+        final hx = p3x - p0x;
+        final hy = p3y - p0y;
+        final pdfHeight = math.max(2.0, math.sqrt(hx * hx + hy * hy));
+
+        final fontSize = (pdfHeight / 1.12).clamp(3.0, 72.0);
+        final metrics = font.stringMetrics(widthReferenceText);
+        final naturalWidth = math.max(0.5, metrics.width * fontSize);
+        final horizontalScale = (pdfWidth / naturalWidth).clamp(0.25, 4.0);
+
+        // Baseline sits slightly above the bottom-left corner (p3 -> p0).
+        final upX = -hx / pdfHeight;
+        final upY = -hy / pdfHeight;
+        final originX = p3x + upX * (fontSize * 0.18);
+        final originY = p3y + upY * (fontSize * 0.18);
+
+        graphics.saveContext();
+        final transform = graphics.getTransform()
+          ..setIdentity()
+          ..translateByDouble(originX, originY, 0.0, 1.0)
+          ..rotateZ(angle);
+        graphics.setTransform(transform);
+        graphics.drawString(
+          font,
+          fontSize,
+          displayText,
+          0.0,
+          0.0,
+          scale: horizontalScale,
+          mode: PdfTextRenderingMode.invisible,
+        );
+        graphics.restoreContext();
+        return;
+      }
+    }
+
     final left = box.left.clamp(0.0, imgWidth.toDouble());
     final bottom = box.bottom.clamp(0.0, imgHeight.toDouble());
     final pdfX = drawX + left * scaleX;

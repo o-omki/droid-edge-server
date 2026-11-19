@@ -196,14 +196,15 @@ class PiiRedactionEngine {
         preprocessed.workingImageBytes,
       );
       final OcrResult ocr;
-      List<BoundingBoxRect> faceBoxes = const [];
+      List<DetectedFaceRegion> faceRegions = const [];
       try {
         ocr = await ocrEngine.processImage(
           stagedPayload,
           script: options.script,
         );
         if (options.presets.contains(RedactionPreset.faces)) {
-          faceBoxes = await faceDetectionEngine.detectFaces(stagedPayload);
+          faceRegions =
+              await faceDetectionEngine.detectOrientedFaces(stagedPayload);
         }
       } finally {
         await stagedPayload.cleanup();
@@ -211,7 +212,7 @@ class PiiRedactionEngine {
 
       final detection = _detectPageRedactions(
         ocr: ocr,
-        faceBoxes: faceBoxes,
+        faceRegions: faceRegions,
         pageIndex: pageIndex,
         options: options,
       );
@@ -297,7 +298,7 @@ class PiiRedactionEngine {
   static ({List<_BurnRegionSpec> burnSpecs, OcrResult sanitizedOcr})
       _detectPageRedactions({
     required OcrResult ocr,
-    required List<BoundingBoxRect> faceBoxes,
+    required List<DetectedFaceRegion> faceRegions,
     required int pageIndex,
     required RedactionOptions options,
   }) {
@@ -352,6 +353,7 @@ class PiiRedactionEngine {
                   pageIndex: pageIndex,
                   category: match.category,
                   boundingBox: boxSpec.box,
+                  cornerPoints: boxSpec.cornerPoints,
                   maskedPreview: maskLabel,
                 ),
                 expandRightEdge: boxSpec.expandRightEdge,
@@ -408,13 +410,14 @@ class PiiRedactionEngine {
       );
     }
 
-    for (final faceBox in faceBoxes) {
+    for (final face in faceRegions) {
       burnSpecs.add(
         _BurnRegionSpec(
           region: RedactedRegion(
             pageIndex: pageIndex,
             category: "face",
-            boundingBox: faceBox,
+            boundingBox: face.boundingBox,
+            cornerPoints: face.cornerPoints,
             maskedPreview: "[FACE REDACTED]",
           ),
           expandRightEdge: true,
@@ -869,9 +872,14 @@ class PiiRedactionEngine {
     return "[REDACTED ADDRESS]";
   }
 
-  /// Resolves the exact pixel bounding box covering the redacted slice of
-  /// [match], excluding the final 4 characters when [keepLast4] is enabled.
-  static ({BoundingBoxRect box, bool expandRightEdge})? _computeMatchBox({
+  /// Resolves the exact pixel bounding box and oriented corner polygon covering
+  /// the redacted slice of [match], excluding the final 4 characters when
+  /// [keepLast4] is enabled.
+  static ({
+    BoundingBoxRect box,
+    List<CornerPoint> cornerPoints,
+    bool expandRightEdge,
+  })? _computeMatchBox({
     required OcrTextLine line,
     required String lineText,
     required List<_ElementSpan> spans,
@@ -906,6 +914,8 @@ class PiiRedactionEngine {
       double? minTop;
       double? maxRight;
       double? maxBottom;
+      final slicedQuads = <List<({double x, double y})>>[];
+      var hasOrientedCorners = line.cornerPoints.length == 4;
 
       for (final span in spans) {
         if (span.end <= match.start || span.start >= redactionEnd) {
@@ -919,8 +929,23 @@ class PiiRedactionEngine {
         final localEnd = math.min(elemLen, redactionEnd - span.start);
         if (localEnd <= localStart) continue;
 
-        final sliceLeft = box.left + (box.width * (localStart / elemLen));
-        final sliceRight = box.left + (box.width * (localEnd / elemLen));
+        final tStart = (localStart / elemLen).clamp(0.0, 1.0);
+        final tEnd = (localEnd / elemLen).clamp(0.0, 1.0);
+
+        if (span.element.cornerPoints.length == 4) {
+          hasOrientedCorners = true;
+          slicedQuads.add(_sliceQuad(span.element.cornerPoints, tStart, tEnd));
+        } else {
+          slicedQuads.add([
+            (x: box.left + box.width * tStart, y: box.top),
+            (x: box.left + box.width * tEnd, y: box.top),
+            (x: box.left + box.width * tEnd, y: box.bottom),
+            (x: box.left + box.width * tStart, y: box.bottom),
+          ]);
+        }
+
+        final sliceLeft = box.left + (box.width * tStart);
+        final sliceRight = box.left + (box.width * tEnd);
 
         minLeft = minLeft == null ? sliceLeft : math.min(minLeft, sliceLeft);
         minTop = minTop == null ? box.top : math.min(minTop, box.top);
@@ -934,6 +959,22 @@ class PiiRedactionEngine {
           minTop != null &&
           maxRight != null &&
           maxBottom != null) {
+        if (hasOrientedCorners && slicedQuads.isNotEmpty) {
+          final frameRef = line.cornerPoints.length == 4
+              ? line.cornerPoints
+                  .map((p) => (x: p.x.toDouble(), y: p.y.toDouble()))
+                  .toList()
+              : slicedQuads.first;
+          final oriented = _orientUnionQuads(slicedQuads, frameRef);
+          if (oriented != null) {
+            return (
+              box: oriented.box,
+              cornerPoints: oriented.cornerPoints,
+              expandRightEdge: !trimmedLast4,
+            );
+          }
+        }
+
         return (
           box: BoundingBoxRect(
             left: minLeft,
@@ -941,6 +982,7 @@ class PiiRedactionEngine {
             right: maxRight,
             bottom: maxBottom,
           ),
+          cornerPoints: const [],
           expandRightEdge: !trimmedLast4,
         );
       }
@@ -953,6 +995,18 @@ class PiiRedactionEngine {
     final endFrac = (redactionEnd / lineText.length).clamp(0.0, 1.0);
     if (endFrac <= startFrac) return null;
 
+    if (line.cornerPoints.length == 4) {
+      final sliced = _sliceQuad(line.cornerPoints, startFrac, endFrac);
+      final oriented = _orientUnionQuads([sliced], sliced);
+      if (oriented != null) {
+        return (
+          box: oriented.box,
+          cornerPoints: oriented.cornerPoints,
+          expandRightEdge: !trimmedLast4,
+        );
+      }
+    }
+
     return (
       box: BoundingBoxRect(
         left: lineBox.left + lineBox.width * startFrac,
@@ -960,7 +1014,118 @@ class PiiRedactionEngine {
         right: lineBox.left + lineBox.width * endFrac,
         bottom: lineBox.bottom,
       ),
+      cornerPoints: const [],
       expandRightEdge: !trimmedLast4,
+    );
+  }
+
+  /// Linearly slices a 4-point oriented quad `[topLeft, topRight, bottomRight,
+  /// bottomLeft]` along its reading direction for `[tStart, tEnd]` in `[0, 1]`.
+  static List<({double x, double y})> _sliceQuad(
+    List<CornerPoint> quad,
+    double tStart,
+    double tEnd,
+  ) {
+    final p0 = quad[0];
+    final p1 = quad[1];
+    final p2 = quad[2];
+    final p3 = quad[3];
+    return [
+      (
+        x: p0.x + (p1.x - p0.x) * tStart,
+        y: p0.y + (p1.y - p0.y) * tStart,
+      ),
+      (
+        x: p0.x + (p1.x - p0.x) * tEnd,
+        y: p0.y + (p1.y - p0.y) * tEnd,
+      ),
+      (
+        x: p3.x + (p2.x - p3.x) * tEnd,
+        y: p3.y + (p2.y - p3.y) * tEnd,
+      ),
+      (
+        x: p3.x + (p2.x - p3.x) * tStart,
+        y: p3.y + (p2.y - p3.y) * tStart,
+      ),
+    ];
+  }
+
+  /// Unions [quads] inside the orthonormal `(u, v)` frame defined by
+  /// [frameRef], returning both the tight oriented 4-corner polygon and its
+  /// enclosing axis-aligned [BoundingBoxRect].
+  static ({BoundingBoxRect box, List<CornerPoint> cornerPoints})?
+      _orientUnionQuads(
+    List<List<({double x, double y})>> quads,
+    List<({double x, double y})> frameRef,
+  ) {
+    if (quads.isEmpty || frameRef.length < 4) return null;
+
+    final dx = frameRef[1].x - frameRef[0].x;
+    final dy = frameRef[1].y - frameRef[0].y;
+    final len = math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-3) return null;
+
+    final ux = dx / len;
+    final uy = dy / len;
+    var vx = -uy;
+    var vy = ux;
+    final hx = frameRef[3].x - frameRef[0].x;
+    final hy = frameRef[3].y - frameRef[0].y;
+    if (hx * vx + hy * vy < 0) {
+      vx = -vx;
+      vy = -vy;
+    }
+
+    var minU = double.infinity;
+    var maxU = double.negativeInfinity;
+    var minV = double.infinity;
+    var maxV = double.negativeInfinity;
+
+    for (final quad in quads) {
+      for (final pt in quad) {
+        final u = pt.x * ux + pt.y * uy;
+        final v = pt.x * vx + pt.y * vy;
+        if (u < minU) minU = u;
+        if (u > maxU) maxU = u;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
+
+    if (!minU.isFinite || !maxU.isFinite || !minV.isFinite || !maxV.isFinite) {
+      return null;
+    }
+
+    final cornersDouble = [
+      (x: ux * minU + vx * minV, y: uy * minU + vy * minV),
+      (x: ux * maxU + vx * minV, y: uy * maxU + vy * minV),
+      (x: ux * maxU + vx * maxV, y: uy * maxU + vy * maxV),
+      (x: ux * minU + vx * maxV, y: uy * minU + vy * maxV),
+    ];
+
+    final cornerPoints = cornersDouble
+        .map((c) => CornerPoint(x: c.x.round(), y: c.y.round()))
+        .toList();
+
+    var minX = double.infinity;
+    var minY = double.infinity;
+    var maxX = double.negativeInfinity;
+    var maxY = double.negativeInfinity;
+    for (final c in cornersDouble) {
+      if (c.x < minX) minX = c.x;
+      if (c.y < minY) minY = c.y;
+      if (c.x > maxX) maxX = c.x;
+      if (c.y > maxY) maxY = c.y;
+    }
+
+    return (
+      box: BoundingBoxRect(
+        left: minX,
+        top: minY,
+        right: maxX,
+        bottom: maxY,
+      ),
+      cornerPoints: cornerPoints,
     );
   }
 
@@ -985,10 +1150,32 @@ class PiiRedactionEngine {
     const pad = 2;
 
     for (final spec in burnSpecs) {
+      final rightPad = spec.expandRightEdge ? pad : 0;
+      final corners = spec.region.cornerPoints;
+
+      if (corners.length >= 3) {
+        final expanded = _expandPolygon(
+          corners,
+          leftPad: pad.toDouble(),
+          rightPad: rightPad.toDouble(),
+          verticalPad: pad.toDouble(),
+          maxWidth: target.width - 1,
+          maxHeight: target.height - 1,
+        );
+        if (expanded.length >= 3) {
+          img.fillPolygon(
+            target,
+            vertices: expanded,
+            blend: img.BlendMode.direct,
+            color: maskColor,
+          );
+          continue;
+        }
+      }
+
       final rect = spec.region.boundingBox;
       final x1 = (rect.left.floor() - pad).clamp(0, target.width - 1);
       final y1 = (rect.top.floor() - pad).clamp(0, target.height - 1);
-      final rightPad = spec.expandRightEdge ? pad : 0;
       final x2 = (rect.right.ceil() + rightPad).clamp(0, target.width - 1);
       final y2 = (rect.bottom.ceil() + pad).clamp(0, target.height - 1);
       if (x2 <= x1 || y2 <= y1) continue;
@@ -1005,6 +1192,63 @@ class PiiRedactionEngine {
     }
 
     return Uint8List.fromList(img.encodePng(target));
+  }
+
+  /// Expands an oriented polygon outward along its reading and perpendicular
+  /// axes, clamping all resulting vertices to image bounds.
+  static List<img.Point> _expandPolygon(
+    List<CornerPoint> corners, {
+    required double leftPad,
+    required double rightPad,
+    required double verticalPad,
+    required int maxWidth,
+    required int maxHeight,
+  }) {
+    if (corners.length == 4) {
+      final dx = (corners[1].x - corners[0].x).toDouble();
+      final dy = (corners[1].y - corners[0].y).toDouble();
+      final len = math.sqrt(dx * dx + dy * dy);
+      if (len >= 1e-3) {
+        final ux = dx / len;
+        final uy = dy / len;
+        var vx = -uy;
+        var vy = ux;
+        final hx = (corners[3].x - corners[0].x).toDouble();
+        final hy = (corners[3].y - corners[0].y).toDouble();
+        if (hx * vx + hy * vy < 0) {
+          vx = -vx;
+          vy = -vy;
+        }
+
+        final offsets = [
+          (-leftPad, -verticalPad),
+          (rightPad, -verticalPad),
+          (rightPad, verticalPad),
+          (-leftPad, verticalPad),
+        ];
+        final result = <img.Point>[];
+        for (var i = 0; i < 4; i++) {
+          final (du, dv) = offsets[i];
+          final px = (corners[i].x + ux * du + vx * dv)
+              .round()
+              .clamp(0, maxWidth);
+          final py = (corners[i].y + uy * du + vy * dv)
+              .round()
+              .clamp(0, maxHeight);
+          result.add(img.Point(px, py));
+        }
+        return result;
+      }
+    }
+
+    return corners
+        .map(
+          (c) => img.Point(
+            c.x.clamp(0, maxWidth),
+            c.y.clamp(0, maxHeight),
+          ),
+        )
+        .toList();
   }
 
   static Future<Uint8List> _buildSanitizedPdfInIsolate({

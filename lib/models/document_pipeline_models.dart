@@ -205,24 +205,33 @@ class RedactedRegion extends Equatable {
     required this.category,
     required this.boundingBox,
     required this.maskedPreview,
+    this.cornerPoints = const [],
   });
 
   final int pageIndex;
   final String category;
   final BoundingBoxRect boundingBox;
   final String maskedPreview;
+  final List<CornerPoint> cornerPoints;
 
   Map<String, dynamic> toJson() {
     return {
       "page_index": pageIndex,
       "category": category,
       "bounding_box": boundingBox.toJson(),
+      "corner_points": cornerPoints.map((p) => p.toJson()).toList(),
       "masked_preview": maskedPreview,
     };
   }
 
   @override
-  List<Object?> get props => [pageIndex, category, boundingBox, maskedPreview];
+  List<Object?> get props => [
+        pageIndex,
+        category,
+        boundingBox,
+        maskedPreview,
+        cornerPoints,
+      ];
 }
 
 /// Summary metadata for a single page inside a generated searchable PDF.

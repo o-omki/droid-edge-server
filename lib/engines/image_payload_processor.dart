@@ -128,26 +128,47 @@ class ImagePayloadProcessor {
         height = info.height;
       }
 
-      // Flatten transparent/RGBA images (such as PNG barcodes or QR codes with
-      // transparent `(0,0,0,0)` backgrounds) onto a solid white canvas so
-      // Android BitmapFactory / ML Kit YUV luminance conversion does not turn
-      // transparent backgrounds into solid black.
+      // Bake EXIF orientation and flatten transparent/RGBA images (such as PNG
+      // barcodes or QR codes with transparent `(0,0,0,0)` backgrounds) onto a
+      // solid white canvas so Android BitmapFactory / ML Kit YUV luminance
+      // conversion does not turn transparent backgrounds into solid black, and
+      // reported dimensions always match the upright visual orientation.
       if (resolvedMime != "image/jpeg") {
         final decoded = decoder.decode(bytes);
         if (decoded != null) {
-          width = decoded.width;
-          height = decoded.height;
-          if (decoded.hasAlpha && _hasTransparentPixels(decoded)) {
-            final flattened = _flattenAlphaOntoWhite(decoded);
+          final hasExifRotation = decoded.exif.imageIfd.hasOrientation &&
+              decoded.exif.imageIfd.orientation != 1;
+          final oriented =
+              hasExifRotation ? img.bakeOrientation(decoded) : decoded;
+          width = oriented.width;
+          height = oriented.height;
+          if (oriented.hasAlpha && _hasTransparentPixels(oriented)) {
+            final flattened = _flattenAlphaOntoWhite(oriented);
             outputBytes = Uint8List.fromList(img.encodePng(flattened));
+            outputMime = "image/png";
+          } else if (hasExifRotation) {
+            outputBytes = Uint8List.fromList(img.encodePng(oriented));
             outputMime = "image/png";
           }
         }
-      } else if (width == null || height == null) {
-        final decoded = decoder.decode(bytes);
-        if (decoded != null) {
-          width = decoded.width;
-          height = decoded.height;
+      } else {
+        final exif = img.decodeJpgExif(bytes);
+        final orientation = exif?.imageIfd.orientation;
+        if (orientation != null && orientation != 1) {
+          final decoded = decoder.decode(bytes);
+          if (decoded != null) {
+            final oriented = img.bakeOrientation(decoded);
+            width = oriented.width;
+            height = oriented.height;
+            outputBytes = Uint8List.fromList(img.encodeJpg(oriented, quality: 95));
+            outputMime = "image/jpeg";
+          }
+        } else if (width == null || height == null) {
+          final decoded = decoder.decode(bytes);
+          if (decoded != null) {
+            width = decoded.width;
+            height = decoded.height;
+          }
         }
       }
     }
