@@ -859,10 +859,11 @@
       const data = item.barcodeData;
       if (!data) return [];
       (data.barcodes || []).forEach((b, idx) => {
-        if (b.bounding_box) {
+        if (b.bounding_box || (Array.isArray(b.corner_points) && b.corner_points.length >= 3)) {
           boxes.push({
             id: `box-barcode-${idx}`,
             box: b.bounding_box,
+            cornerPoints: Array.isArray(b.corner_points) ? b.corner_points : [],
             label: b.display_value || b.raw_value || "(empty)",
             isRedact: false,
           });
@@ -875,10 +876,17 @@
       const data = item.redactData;
       if (!data) return [];
       (data.regions || []).forEach((region, idx) => {
-        if ((region.page_index || 0) === 0 && region.bounding_box) {
+        if (
+          (region.page_index || 0) === 0 &&
+          (region.bounding_box ||
+            (Array.isArray(region.corner_points) && region.corner_points.length >= 3))
+        ) {
           boxes.push({
             id: `box-redact-${idx}`,
             box: region.bounding_box,
+            cornerPoints: Array.isArray(region.corner_points)
+              ? region.corner_points
+              : [],
             label: `${String(region.category || "pii").toUpperCase()} · ${
               region.masked_preview || "[REDACTED]"
             }`,
@@ -898,10 +906,16 @@
     const blocks = data.blocks || [];
     if (state.overlayLevel === "blocks") {
       blocks.forEach((blk, bIdx) => {
-        if (blk.bounding_box) {
+        if (
+          blk.bounding_box ||
+          (Array.isArray(blk.corner_points) && blk.corner_points.length >= 3)
+        ) {
           boxes.push({
             id: `box-block-${bIdx}`,
             box: blk.bounding_box,
+            cornerPoints: Array.isArray(blk.corner_points)
+              ? blk.corner_points
+              : [],
             label: blk.text || "",
             isRedact: false,
           });
@@ -910,10 +924,16 @@
     } else {
       blocks.forEach((blk, bIdx) => {
         (blk.lines || []).forEach((line, lIdx) => {
-          if (line.bounding_box) {
+          if (
+            line.bounding_box ||
+            (Array.isArray(line.corner_points) && line.corner_points.length >= 3)
+          ) {
             boxes.push({
               id: `box-line-${bIdx}-${lIdx}`,
               box: line.bounding_box,
+              cornerPoints: Array.isArray(line.corner_points)
+                ? line.corner_points
+                : [],
               label: line.text || "",
               isRedact: false,
             });
@@ -999,26 +1019,35 @@
     const ns = "http://www.w3.org/2000/svg";
 
     boxes.forEach((entry) => {
-      const rect = document.createElementNS(ns, "rect");
-      rect.setAttribute("x", String(entry.box.left));
-      rect.setAttribute("y", String(entry.box.top));
-      rect.setAttribute("width", String(Math.max(1, entry.box.width)));
-      rect.setAttribute("height", String(Math.max(1, entry.box.height)));
-      rect.dataset.boxId = entry.id;
-      rect.setAttribute(
+      const hasQuad =
+        Array.isArray(entry.cornerPoints) && entry.cornerPoints.length >= 3;
+      const shape = document.createElementNS(ns, hasQuad ? "polygon" : "rect");
+      if (hasQuad) {
+        const pts = entry.cornerPoints
+          .map((p) => `${Number(p.x) || 0},${Number(p.y) || 0}`)
+          .join(" ");
+        shape.setAttribute("points", pts);
+      } else if (entry.box) {
+        shape.setAttribute("x", String(entry.box.left));
+        shape.setAttribute("y", String(entry.box.top));
+        shape.setAttribute("width", String(Math.max(1, entry.box.width)));
+        shape.setAttribute("height", String(Math.max(1, entry.box.height)));
+      }
+      shape.dataset.boxId = entry.id;
+      shape.setAttribute(
         "class",
         `bbox-rect${entry.isRedact ? " redact-box" : ""}${
           state.selectedBoxId === entry.id ? " active" : ""
         }`
       );
 
-      rect.addEventListener("mouseenter", () => {
+      shape.addEventListener("mouseenter", () => {
         setHoveredBox(entry.id, entry.label);
       });
-      rect.addEventListener("mouseleave", () => {
+      shape.addEventListener("mouseleave", () => {
         setHoveredBox(null, "");
       });
-      rect.addEventListener("click", (e) => {
+      shape.addEventListener("click", (e) => {
         e.stopPropagation();
         if (state.selectedBoxId === entry.id) {
           clearBoxSelection();
@@ -1027,7 +1056,7 @@
         }
       });
 
-      svg.appendChild(rect);
+      svg.appendChild(shape);
     });
   }
 

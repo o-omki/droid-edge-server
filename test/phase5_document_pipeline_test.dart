@@ -239,6 +239,17 @@ class _Phase5FakeFaceEngine implements FaceDetectionEngine {
   }
 
   @override
+  Future<List<DetectedFaceRegion>> detectOrientedFaces(
+    PreparedImagePayload payload,
+  ) async {
+    return const [
+      DetectedFaceRegion(
+        boundingBox: BoundingBoxRect(left: 290, top: 20, right: 370, bottom: 100),
+      ),
+    ];
+  }
+
+  @override
   Future<void> dispose() async {
     disposed = true;
   }
