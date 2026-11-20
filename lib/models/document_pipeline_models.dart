@@ -56,15 +56,15 @@ class SearchablePdfOptions extends Equatable {
 
   @override
   List<Object?> get props => [
-        pageFormat,
-        enhanceContrast,
-        contrast,
-        brightness,
-        maxSizeMb,
-        script,
-        stripMetadata,
-        includePreviews,
-      ];
+    pageFormat,
+    enhanceContrast,
+    contrast,
+    brightness,
+    maxSizeMb,
+    script,
+    stripMetadata,
+    includePreviews,
+  ];
 }
 
 enum RedactionPreset {
@@ -109,6 +109,15 @@ enum RedactionPreset {
         case "pan":
         case "gstin":
         case "voter":
+        case "passport":
+        case "mrz":
+        case "nric":
+        case "ni":
+        case "licence":
+        case "license":
+        case "dob":
+        case "birth":
+        case "identity":
           parsed.add(RedactionPreset.ids);
           break;
         case "contact":
@@ -118,6 +127,9 @@ enum RedactionPreset {
         case "email":
         case "emails":
         case "upi":
+        case "name":
+        case "names":
+        case "person":
           parsed.add(RedactionPreset.contacts);
           break;
         case "address":
@@ -188,14 +200,14 @@ class RedactionOptions extends Equatable {
 
   @override
   List<Object?> get props => [
-        presets,
-        keepLast4,
-        enhanceContrast,
-        stripMetadata,
-        outputFormat,
-        script,
-        pageFormat,
-      ];
+    presets,
+    keepLast4,
+    enhanceContrast,
+    stripMetadata,
+    outputFormat,
+    script,
+    pageFormat,
+  ];
 }
 
 /// A single PII or facial region permanently masked on a document page.
@@ -226,12 +238,12 @@ class RedactedRegion extends Equatable {
 
   @override
   List<Object?> get props => [
-        pageIndex,
-        category,
-        boundingBox,
-        maskedPreview,
-        cornerPoints,
-      ];
+    pageIndex,
+    category,
+    boundingBox,
+    maskedPreview,
+    cornerPoints,
+  ];
 }
 
 /// Summary metadata for a single page inside a generated searchable PDF.
@@ -265,13 +277,13 @@ class SearchablePdfPageSummary extends Equatable {
 
   @override
   List<Object?> get props => [
-        pageIndex,
-        width,
-        height,
-        ocrInferenceMs,
-        characterCount,
-        text,
-      ];
+    pageIndex,
+    width,
+    height,
+    ocrInferenceMs,
+    characterCount,
+    text,
+  ];
 }
 
 /// Result returned by [SearchablePdfEngine].
@@ -334,22 +346,22 @@ class SearchablePdfResult extends Equatable {
 
   @override
   List<Object?> get props => [
-        pdfBytes,
-        pageCount,
-        byteLength,
-        targetMaxSizeMb,
-        targetSizeMet,
-        appliedJpegQuality,
-        appliedScaleFactor,
-        metadataStripped,
-        contrastEnhanced,
-        pageFormat,
-        processingMs,
-        fullText,
-        pages,
-        beforePreviewBase64,
-        afterPreviewBase64,
-      ];
+    pdfBytes,
+    pageCount,
+    byteLength,
+    targetMaxSizeMb,
+    targetSizeMet,
+    appliedJpegQuality,
+    appliedScaleFactor,
+    metadataStripped,
+    contrastEnhanced,
+    pageFormat,
+    processingMs,
+    fullText,
+    pages,
+    beforePreviewBase64,
+    afterPreviewBase64,
+  ];
 }
 
 /// Result returned by [PiiRedactionEngine].
@@ -415,23 +427,23 @@ class RedactionResult extends Equatable {
 
   @override
   List<Object?> get props => [
-        outputBytes,
-        outputMimeType,
-        pdfBytes,
-        beforeImageBytes,
-        afterImageBytes,
-        pageCount,
-        redactedCount,
-        categoryCounts,
-        regions,
-        metadataStripped,
-        keepLast4,
-        contrastEnhanced,
-        processingMs,
-        sanitizedText,
-        imageWidth,
-        imageHeight,
-      ];
+    outputBytes,
+    outputMimeType,
+    pdfBytes,
+    beforeImageBytes,
+    afterImageBytes,
+    pageCount,
+    redactedCount,
+    categoryCounts,
+    regions,
+    metadataStripped,
+    keepLast4,
+    contrastEnhanced,
+    processingMs,
+    sanitizedText,
+    imageWidth,
+    imageHeight,
+  ];
 }
 
 /// Categories of document pipeline jobs tracked in [DocumentPipelineCubit].
@@ -495,15 +507,15 @@ class DocumentJobRecord extends Equatable {
 
   @override
   List<Object?> get props => [
-        id,
-        timestamp,
-        type,
-        pageCount,
-        inputBytes,
-        outputBytes,
-        redactedCount,
-        metadataStripped,
-        processingMs,
-        targetSizeMet,
-      ];
+    id,
+    timestamp,
+    type,
+    pageCount,
+    inputBytes,
+    outputBytes,
+    redactedCount,
+    metadataStripped,
+    processingMs,
+    targetSizeMet,
+  ];
 }
