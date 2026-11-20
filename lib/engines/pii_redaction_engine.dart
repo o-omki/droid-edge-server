@@ -8,12 +8,42 @@ import "package:pdf/pdf.dart";
 import "../models/document_pipeline_models.dart";
 import "../models/geometry_models.dart";
 import "../models/ocr_result.dart";
+import "../models/openai_vision_models.dart";
 import "document_image_utils.dart";
 import "document_input_loader.dart";
+import "entity_extraction_engine.dart";
 import "face_detection_engine.dart";
 import "image_payload_processor.dart";
 import "ocr_engine.dart";
 import "pdf_rasterizer.dart";
+
+enum _FieldHeaderKind {
+  id,
+  address,
+  name,
+  dob,
+  otherField,
+}
+
+class _IndexedLine {
+  const _IndexedLine({
+    required this.blockIndex,
+    required this.lineIndex,
+    required this.line,
+    required this.text,
+    required this.spans,
+    required this.headerKind,
+    required this.isStandaloneHeader,
+  });
+
+  final int blockIndex;
+  final int lineIndex;
+  final OcrTextLine line;
+  final String text;
+  final List<_ElementSpan> spans;
+  final _FieldHeaderKind? headerKind;
+  final bool isStandaloneHeader;
+}
 
 class _BurnRegionSpec {
   const _BurnRegionSpec({
@@ -46,6 +76,7 @@ class _PiiMatchCandidate {
     required this.end,
     required this.matchedText,
     required this.supportsKeepLast4,
+    this.maskPreviewOverride,
   });
 
   final String category;
@@ -53,6 +84,7 @@ class _PiiMatchCandidate {
   final int end;
   final String matchedText;
   final bool supportsKeepLast4;
+  final String? maskPreviewOverride;
 }
 
 class _StagedSanitizedPage {
@@ -79,11 +111,13 @@ class PiiRedactionEngine {
     required this.ocrEngine,
     required this.faceDetectionEngine,
     required this.pdfRasterizer,
+    this.entityExtractionEngine,
   });
 
   final OcrEngine ocrEngine;
   final FaceDetectionEngine faceDetectionEngine;
   final PdfRasterizer pdfRasterizer;
+  final EntityExtractionEngine? entityExtractionEngine;
 
   static final RegExp _emailRegex = RegExp(
     r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b",
@@ -113,10 +147,19 @@ class PiiRedactionEngine {
   static final RegExp _indianPassportRegex = RegExp(
     r"\b[A-PR-WY][1-9]\d\s?\d{4}[1-9]\b",
   );
+  static final RegExp _singaporeNricRegex = RegExp(
+    r"\b[STFGM]\d{7}[A-Z]\b",
+  );
+  static final RegExp _ukNiRegex = RegExp(
+    r"\b(?:QQ|[A-CEGHJ-PR-TW-Z]{2})\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b",
+  );
+  static final RegExp _ukDlRegex = RegExp(
+    r"\b[A-Z9]{5}\d{6}[A-Z9]{2}\d[A-Z]{2}\b",
+  );
   static final RegExp _ifscRegex = RegExp(r"\b[A-Z]{4}0[A-Z0-9]{6}\b");
   static final RegExp _ibanRegex = RegExp(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,28}\b");
   static final RegExp _labeledIdRegex = RegExp(
-    r"(?:\b(?:ID|ID\s*#|SSN|SIN|TIN|EIN|Tax\s*ID|Account|Acct|Acc|Card|Policy|License|Licence|DL|Passport|Member\s*ID|Customer\s*ID|Aadhaar|Aadhar|UID|VID|PAN|GSTIN|GST|EPIC|Voter\s*ID|PRAN|UAN|IFSC|CIF|CKYC|ABHA|Ayushman)\b|(?:आधार|पैन|पहचान))(?:\s*(?:No|Num|Number|संख्या|#))?\s*[:#\-]?\s*(?=[A-Z0-9\-]*\d)([A-Z0-9][A-Z0-9\-]{4,24})",
+    r"(?:\b(?:ID|ID\s*#|SSN|SIN|TIN|EIN|Tax\s*ID|Account|Acct|Acc|Card|Policy|License|Licence|DL|Passport|Member\s*ID|Customer\s*ID|Document|Doc|Dokumentennummer|Ausweisnummer|Zugangsnummer|National\s+Insurance|NRIC|FIN|Personalnummer|Aadhaar|Aadhar|UID|VID|PAN|GSTIN|GST|EPIC|Voter\s*ID|PRAN|UAN|IFSC|CIF|CKYC|ABHA|Ayushman)\b|(?:身份证号码|证件号码|आधार|पैन|पहचान))(?:\s*(?:No\.?|Num\.?|Number|संख्या|#))?(?:\s*/[^:\n]{1,24})?\s*[:#\-]?\s*(?=[A-Z0-9\-]*\d)([A-Z0-9][A-Z0-9\-]{4,24})",
     caseSensitive: false,
   );
   static final RegExp _indianMobileRegex = RegExp(
@@ -133,11 +176,25 @@ class PiiRedactionEngine {
     caseSensitive: false,
   );
   static final RegExp _labeledAddressRegex = RegExp(
-    r"(?:\b(?:Address|Addr|Residence|Location)\b|पता)\s*[:\-]\s*(.+)$",
+    r"(?:\b(?:Address|Addr|Residence|Location|Anschrift|Adresse|Wohnort|Wohnsitz|Domicile|Indirizzo|Dirección|Direccion|Adres|Endereço|Endereco)\b|住所|地址|住址|पता)(?:\s*/[^:\-\n]{1,24})?\s*[:\-]\s*(.+)$",
     caseSensitive: false,
   );
   static final RegExp _streetAddressRegex = RegExp(
-    r"\b\d{1,6}\s+(?:[A-Za-z0-9.#\-]+\s+){1,5}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Parkway|Pkwy|Circle|Cir|Place|Pl|Terrace|Ter|Square|Sq)\b\.?(?:[,\s]+[A-Za-z0-9\s,\-]{2,40})?",
+    r"\b(?:(?:BLK|Block)\s+)?\d{1,6}[A-Za-z]?\s+(?:[A-Za-z0-9.#\-]+\s+){1,5}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Parkway|Pkwy|Circle|Cir|Place|Pl|Terrace|Ter|Square|Sq|Crescent|Cres|Close|Gardens|Gdns|Grove|Walk|Row|Mews)\b\.?(?:[,\s]+[A-Za-z0-9\s,\-]{2,40})?",
+    caseSensitive: false,
+  );
+  static final RegExp _europeanStreetAddressRegex = RegExp(
+    r"(?:\b(?:\d{1,5}[A-Za-z]?\s+)?(?:[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9\-]{1,28}\s+){0,3}[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-]{1,24}(?:strasse|straße|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee|steig)\s+\d{1,5}[A-Za-z]?(?:[,\s]+(?:\d{4,5}\s+)?[A-Za-zÀ-ÿ0-9\s,\-]{2,40})?|\b\d{1,5}[A-Za-z]?\s+(?:[A-Za-zÀ-ÿ0-9\-]+\s+){0,3}[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-]{1,24}(?:strasse|straße|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee|steig)\b(?:[,\s]+(?:\d{4,5}\s+)?[A-Za-zÀ-ÿ0-9\s,\-]{2,40})?|\b\d{1,5}[A-Za-z]?\s+(?:Rue|Allée|Impasse|Chemin|Calle|Avenida|Avda\.|Paseo|Via|Viale|Piazza|Corso|Straat|Laan|Plein)\s+[A-Za-zÀ-ÿ0-9.'\-\s]{2,45}|\b(?:Rue|Allée|Impasse|Chemin|Calle|Avenida|Avda\.|Paseo|Via|Viale|Piazza|Corso|Straat|Laan|Plein)\s+(?:[A-Za-zÀ-ÿ0-9.'\-]+\s+){1,5}\d{1,5}[A-Za-z]?(?:[,\s]+(?:\d{4,5}\s+)?[A-Za-zÀ-ÿ0-9\s,\-]{2,40})?)",
+    caseSensitive: false,
+  );
+  static final RegExp _ukPostcodeAddressRegex = RegExp(
+    r"(?:[A-Za-z][A-Za-z.\-\s]{1,28}[,\s]+)?\b(?:GIR\s?0AA|[A-PR-UWYZ][A-HK-Y]?\d[A-Z\d]?\s?\d[ABD-HJLNP-UW-Z]{2})\b",
+  );
+  static final RegExp _euPostalCityRegex = RegExp(
+    r"(?<![.\-/\d])\b\d{5}\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÿ\-]{2,28}(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÿ\-]{2,20})?\b",
+  );
+  static final RegExp _singaporeAddressLineRegex = RegExp(
+    r"(?:#\d{1,3}-\d{1,5}(?:[,\s]+[A-Za-z0-9\s,\-]{2,40})?|\bSINGAPORE\s+\d{6}\b|\bBLK\s+\d+[A-Z]?\s+[A-Za-z0-9\s,.\-#]{3,50})",
     caseSensitive: false,
   );
   static final RegExp _indianAddressLineRegex = RegExp(
@@ -210,11 +267,39 @@ class PiiRedactionEngine {
         await stagedPayload.cleanup();
       }
 
+      final entityItemsByBlock = <int, List<ExtractedEntityItem>>{};
+      final extractor = entityExtractionEngine;
+      final needsTextEntities =
+          options.presets.contains(RedactionPreset.ids) ||
+          options.presets.contains(RedactionPreset.contacts) ||
+          options.presets.contains(RedactionPreset.addresses);
+      if (extractor != null && needsTextEntities) {
+        try {
+          final available = await extractor.isNativeModelAvailable();
+          if (available) {
+            for (var blockIdx = 0; blockIdx < ocr.blocks.length; blockIdx++) {
+              final block = ocr.blocks[blockIdx];
+              final resolvedLines =
+                  block.lines.map(_resolveLineSpans).toList();
+              final joined = _buildResolvedBlockText(resolvedLines).blockText;
+              if (joined.trim().isEmpty) continue;
+              final items = await extractor.extractEntities(joined);
+              if (items.isNotEmpty) {
+                entityItemsByBlock[blockIdx] = items;
+              }
+            }
+          }
+        } catch (_) {
+          // Deterministic rules remain authoritative if ML Kit extraction fails.
+        }
+      }
+
       final detection = _detectPageRedactions(
         ocr: ocr,
         faceRegions: faceRegions,
         pageIndex: pageIndex,
         options: options,
+        entityItemsByBlock: entityItemsByBlock,
       );
 
       for (final spec in detection.burnSpecs) {
@@ -301,19 +386,95 @@ class PiiRedactionEngine {
     required List<DetectedFaceRegion> faceRegions,
     required int pageIndex,
     required RedactionOptions options,
+    Map<int, List<ExtractedEntityItem>> entityItemsByBlock = const {},
   }) {
     final burnSpecs = <_BurnRegionSpec>[];
     final sanitizedBlocks = <OcrTextBlock>[];
 
-    for (final block in ocr.blocks) {
-      final sanitizedLines = <OcrTextLine>[];
+    // Pass 1: Resolve all line spans, classify potential field headers, and
+    // run deterministic single-line matchers.
+    final resolvedByBlock = <int, List<({String text, List<_ElementSpan> spans})>>{};
+    final pageLines = <_IndexedLine>[];
+    final candidatesByLine = <(int, int), List<_PiiMatchCandidate>>{};
 
-      for (final line in block.lines) {
+    for (var blockIdx = 0; blockIdx < ocr.blocks.length; blockIdx++) {
+      final block = ocr.blocks[blockIdx];
+      final resolvedLines = <({String text, List<_ElementSpan> spans})>[];
+
+      for (var lineIdx = 0; lineIdx < block.lines.length; lineIdx++) {
+        final line = block.lines[lineIdx];
         final lineData = _resolveLineSpans(line);
-        final candidates = _findLineCandidates(
+        resolvedLines.add(lineData);
+
+        final scanText = _normaliseIndicDigits(lineData.text);
+        final sameLinePair = _splitSameLineHeaderValue(scanText);
+        final headerKind = sameLinePair != null
+            ? null
+            : _classifyHeaderLine(scanText);
+
+        pageLines.add(
+          _IndexedLine(
+            blockIndex: blockIdx,
+            lineIndex: lineIdx,
+            line: line,
+            text: lineData.text,
+            spans: lineData.spans,
+            headerKind: headerKind,
+            isStandaloneHeader:
+                sameLinePair == null &&
+                headerKind != null &&
+                headerKind != _FieldHeaderKind.otherField,
+          ),
+        );
+
+        final lineCandidates = _findLineCandidates(
           lineText: lineData.text,
           presets: options.presets,
         );
+        if (lineCandidates.isNotEmpty) {
+          candidatesByLine[(blockIdx, lineIdx)] = lineCandidates;
+        }
+      }
+
+      resolvedByBlock[blockIdx] = resolvedLines;
+    }
+
+    // Pass 2: Propagate standalone multilingual headers (ID, Address, Name,
+    // DOB) onto immediately following or spatially aligned value lines below.
+    _propagateStackedHeaderCandidates(
+      pageLines: pageLines,
+      presets: options.presets,
+      candidatesByLine: candidatesByLine,
+    );
+
+    // Pass 3: Project optional offline ML Kit Entity Extraction matches back
+    // onto individual OCR lines when the native model is cached on device.
+    for (final entry in entityItemsByBlock.entries) {
+      final blockIdx = entry.key;
+      final resolvedLines = resolvedByBlock[blockIdx];
+      if (resolvedLines == null || resolvedLines.isEmpty) continue;
+      _mapBlockEntitiesToLines(
+        blockIndex: blockIdx,
+        resolvedLines: resolvedLines,
+        entities: entry.value,
+        presets: options.presets,
+        candidatesByLine: candidatesByLine,
+      );
+    }
+
+    // Pass 4: Deduplicate candidates per line, burn masks, and rebuild OCR.
+    for (var blockIdx = 0; blockIdx < ocr.blocks.length; blockIdx++) {
+      final block = ocr.blocks[blockIdx];
+      final resolvedLines = resolvedByBlock[blockIdx] ?? const [];
+      final sanitizedLines = <OcrTextLine>[];
+
+      for (var lineIdx = 0; lineIdx < block.lines.length; lineIdx++) {
+        final line = block.lines[lineIdx];
+        final lineData = resolvedLines[lineIdx];
+        final rawCandidates = candidatesByLine[(blockIdx, lineIdx)];
+        final candidates = rawCandidates == null
+            ? const <_PiiMatchCandidate>[]
+            : _deduplicateCandidates(rawCandidates);
 
         if (candidates.isEmpty) {
           sanitizedLines.add(line);
@@ -332,6 +493,7 @@ class PiiRedactionEngine {
             category: match.category,
             matchedText: match.matchedText,
             keepLast4: options.keepLast4 && match.supportsKeepLast4,
+            maskPreviewOverride: match.maskPreviewOverride,
           );
           sanitizedLineText = sanitizedLineText.replaceRange(
             match.start,
@@ -515,6 +677,11 @@ class PiiRedactionEngine {
     final candidates = <_PiiMatchCandidate>[];
 
     if (presets.contains(RedactionPreset.ids)) {
+      final mrzCandidate = _detectMrzCandidate(scanText);
+      if (mrzCandidate != null) {
+        candidates.add(mrzCandidate);
+      }
+
       for (final m in _groupedCardRegex.allMatches(scanText)) {
         candidates.add(
           _PiiMatchCandidate(
@@ -610,6 +777,39 @@ class PiiRedactionEngine {
         );
       }
       for (final m in _indianPassportRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "id",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: true,
+          ),
+        );
+      }
+      for (final m in _singaporeNricRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "id",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: true,
+          ),
+        );
+      }
+      for (final m in _ukNiRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "id",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: true,
+          ),
+        );
+      }
+      for (final m in _ukDlRegex.allMatches(scanText)) {
         candidates.add(
           _PiiMatchCandidate(
             category: "id",
@@ -774,6 +974,50 @@ class PiiRedactionEngine {
           ),
         );
       }
+      for (final m in _europeanStreetAddressRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "address",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: false,
+          ),
+        );
+      }
+      for (final m in _ukPostcodeAddressRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "address",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: false,
+          ),
+        );
+      }
+      for (final m in _euPostalCityRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "address",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: false,
+          ),
+        );
+      }
+      for (final m in _singaporeAddressLineRegex.allMatches(scanText)) {
+        candidates.add(
+          _PiiMatchCandidate(
+            category: "address",
+            start: m.start,
+            end: m.end,
+            matchedText: m.group(0)!,
+            supportsKeepLast4: false,
+          ),
+        );
+      }
       for (final m in _indianAddressLineRegex.allMatches(scanText)) {
         candidates.add(
           _PiiMatchCandidate(
@@ -798,7 +1042,700 @@ class PiiRedactionEngine {
       }
     }
 
+    final sameLinePair = _splitSameLineHeaderValue(scanText);
+    if (sameLinePair != null) {
+      final candidate = _buildHeaderValueCandidate(
+        kind: sameLinePair.kind,
+        value: sameLinePair.value,
+        start: sameLinePair.valueStart,
+        end: sameLinePair.valueEnd,
+        presets: presets,
+      );
+      if (candidate != null) {
+        candidates.add(candidate);
+      }
+    }
+
     return _deduplicateCandidates(candidates);
+  }
+
+  static ({
+    String blockText,
+    List<({int lineIndex, int start, int end})> lineRanges,
+  }) _buildResolvedBlockText(
+    List<({String text, List<_ElementSpan> spans})> resolvedLines,
+  ) {
+    final buffer = StringBuffer();
+    final ranges = <({int lineIndex, int start, int end})>[];
+    for (var i = 0; i < resolvedLines.length; i++) {
+      if (i > 0) buffer.write("\n");
+      final start = buffer.length;
+      buffer.write(resolvedLines[i].text);
+      ranges.add((lineIndex: i, start: start, end: buffer.length));
+    }
+    return (blockText: buffer.toString(), lineRanges: ranges);
+  }
+
+  static _PiiMatchCandidate? _detectMrzCandidate(String scanText) {
+    final trimmed = scanText.trim();
+    if (trimmed.isEmpty) return null;
+    final compact = trimmed.replaceAll(RegExp(r"\s+"), "");
+    if (compact.length < 24 || compact.length > 48) return null;
+    if (!RegExp(r"^[A-Z0-9<«‹]+$").hasMatch(compact)) return null;
+    final chevronCount = RegExp(r"[<«‹]").allMatches(compact).length;
+    final hasDoubleChevron =
+        compact.contains("<<") ||
+        compact.contains("««") ||
+        compact.contains("‹‹");
+    if (!hasDoubleChevron && chevronCount < 4) return null;
+
+    final start = scanText.indexOf(trimmed);
+    if (start == -1) return null;
+    return _PiiMatchCandidate(
+      category: "id",
+      start: start,
+      end: start + trimmed.length,
+      matchedText: trimmed,
+      supportsKeepLast4: false,
+      maskPreviewOverride: "[REDACTED MRZ]",
+    );
+  }
+
+  static const Set<String> _idHeaderSegments = {
+    "id no",
+    "id number",
+    "id num",
+    "id #",
+    "identity no",
+    "identity number",
+    "document no",
+    "document number",
+    "doc no",
+    "dokumentennummer",
+    "ausweisnummer",
+    "personalnummer",
+    "kennnummer",
+    "zugangsnummer",
+    "card access number",
+    "passport no",
+    "passport number",
+    "n° de passeport",
+    "numéro de passeport",
+    "licence no",
+    "license no",
+    "licence number",
+    "license number",
+    "driver's licence no",
+    "driver's license no",
+    "driving licence no",
+    "dl no",
+    "national insurance no",
+    "national insurance number",
+    "ni no",
+    "ni number",
+    "nric",
+    "nric no",
+    "fin",
+    "ssn",
+    "sin",
+    "tin",
+    "ein",
+    "tax id",
+    "aadhaar",
+    "aadhaar no",
+    "aadhar",
+    "uid",
+    "pan",
+    "gstin",
+    "epic",
+    "voter id",
+    "account no",
+    "account number",
+    "policy no",
+    "身份证号码",
+    "证件号码",
+    "आधार",
+    "पैन",
+    "पहचान संख्या",
+  };
+
+  static const Set<String> _addressHeaderSegments = {
+    "address",
+    "addr",
+    "residential address",
+    "permanent address",
+    "home address",
+    "mailing address",
+    "current address",
+    "residence",
+    "place of residence",
+    "location",
+    "anschrift",
+    "adresse",
+    "wohnort",
+    "wohnsitz",
+    "domicile",
+    "dirección",
+    "direccion",
+    "indirizzo",
+    "adres",
+    "endereço",
+    "endereco",
+    "morada",
+    "住所",
+    "地址",
+    "住址",
+    "पता",
+    "स्थायी पता",
+  };
+
+  static const Set<String> _nameHeaderSegments = {
+    "name",
+    "full name",
+    "surname",
+    "last name",
+    "family name",
+    "first name",
+    "first name(s)",
+    "first names",
+    "given name",
+    "given names",
+    "middle name",
+    "other name",
+    "other names",
+    "secondary name",
+    "maiden name",
+    "father's name",
+    "father name",
+    "mother's name",
+    "mother name",
+    "spouse name",
+    "spouse's name",
+    "holder's name",
+    "holder name",
+    "cardholder name",
+    "alias",
+    "vorname",
+    "vornamen",
+    "nachname",
+    "familienname",
+    "vatername",
+    "zweitname",
+    "geburtsname",
+    "künstlername",
+    "nom",
+    "nom de famille",
+    "prénom",
+    "prenom",
+    "prénoms",
+    "prenoms",
+    "nom d'usage",
+    "nombre",
+    "apellido",
+    "apellidos",
+    "cognome",
+    "nome",
+    "achternaam",
+    "voornamen",
+    "姓名",
+    "别名",
+    "नाम",
+    "पिता का नाम",
+  };
+
+  static const Set<String> _dobHeaderSegments = {
+    "dob",
+    "d.o.b",
+    "date of birth",
+    "birth date",
+    "birthdate",
+    "date & place of birth",
+    "date and place of birth",
+    "geburtsdatum",
+    "geb.-datum",
+    "geburtstag",
+    "date de naissance",
+    "né(e) le",
+    "fecha de nacimiento",
+    "data di nascita",
+    "geboortedatum",
+    "data de nascimento",
+    "出生日期",
+    "जन्म तिथि",
+    "जन्म दिनांक",
+  };
+
+  static const Set<String> _otherFieldHeaderSegments = {
+    "status",
+    "nationality",
+    "nationalität",
+    "staatsangehörigkeit",
+    "sex",
+    "sexe",
+    "gender",
+    "geschlecht",
+    "race",
+    "种族",
+    "身份",
+    "date of issue",
+    "date de délivrance",
+    "date of expiry",
+    "date d'expiration",
+    "issued by",
+    "authority",
+    "autorité",
+    "country of birth",
+    "出生国",
+    "place of birth",
+    "geburtsort",
+    "signature",
+    "holder's signature",
+    "signature du titulaire",
+    "height",
+    "größe",
+    "eye colour",
+    "eye color",
+    "augenfarbe",
+    "blood group",
+    "type",
+    "code",
+    "class",
+    "category",
+    "categories",
+    "restrictions",
+    "specimen",
+    "test card",
+    "photograph",
+    "valid from",
+    "valid to",
+    "valid until",
+    "codes",
+  };
+
+  static String _normaliseHeaderSegment(String rawSegment) {
+    var cleaned = rawSegment.trim().toLowerCase();
+    // Strip optional leading numbered field prefix such as "5.", "4a.", "8)".
+    cleaned = cleaned.replaceFirst(RegExp(r"^\d{1,2}[a-z]?[.)]\s+"), "");
+    // Strip trailing colon, full-width colon, dash, dot, or whitespace.
+    cleaned = cleaned.replaceAll(RegExp(r"[\s:：\-.]+$"), "").trim();
+    return cleaned.replaceAll(RegExp(r"\s+"), " ");
+  }
+
+  static _FieldHeaderKind? _classifyHeaderSegment(String rawSegment) {
+    final norm = _normaliseHeaderSegment(rawSegment);
+    if (norm.isEmpty) return null;
+    if (_idHeaderSegments.contains(norm)) return _FieldHeaderKind.id;
+    if (_addressHeaderSegments.contains(norm)) return _FieldHeaderKind.address;
+    if (_nameHeaderSegments.contains(norm)) return _FieldHeaderKind.name;
+    if (_dobHeaderSegments.contains(norm)) return _FieldHeaderKind.dob;
+    if (_otherFieldHeaderSegments.contains(norm)) {
+      return _FieldHeaderKind.otherField;
+    }
+    return null;
+  }
+
+  static _FieldHeaderKind? _classifyHeaderLine(
+    String rawLine, {
+    bool allowUnknownEndColon = true,
+  }) {
+    final trimmed = rawLine.trim();
+    if (trimmed.isEmpty ||
+        trimmed.length > 72 ||
+        RegExp(r"\d{4,}").hasMatch(trimmed)) {
+      return null;
+    }
+
+    const headerPriority = {
+      _FieldHeaderKind.id: 5,
+      _FieldHeaderKind.address: 4,
+      _FieldHeaderKind.name: 3,
+      _FieldHeaderKind.dob: 2,
+      _FieldHeaderKind.otherField: 1,
+    };
+
+    _FieldHeaderKind? bestKind;
+    final segments = trimmed.split(RegExp(r"\s*[/|·]\s*"));
+    for (final segment in segments) {
+      final kind = _classifyHeaderSegment(segment);
+      if (kind == null) continue;
+      if (bestKind == null ||
+          (headerPriority[kind] ?? 0) > (headerPriority[bestKind] ?? 0)) {
+        bestKind = kind;
+      }
+    }
+    if (bestKind != null) {
+      return bestKind;
+    }
+
+    if (!allowUnknownEndColon) return null;
+
+    if ((trimmed.endsWith(":") || trimmed.endsWith("：")) &&
+        !RegExp(r"\d{3,}").hasMatch(trimmed)) {
+      return _FieldHeaderKind.otherField;
+    }
+
+    if (RegExp(r"^\d{1,2}[a-z]?[.)]\s+[A-Za-zÀ-ÿ]").hasMatch(trimmed) &&
+        trimmed.length <= 36 &&
+        !RegExp(
+          r"\b(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Parkway|Pkwy|Circle|Cir|Place|Pl|Rue|Via|Calle|Strasse|Straße|Weg)\b",
+          caseSensitive: false,
+        ).hasMatch(trimmed)) {
+      return _FieldHeaderKind.otherField;
+    }
+
+    return null;
+  }
+
+  static ({
+    _FieldHeaderKind kind,
+    String value,
+    int valueStart,
+    int valueEnd,
+  })? _splitSameLineHeaderValue(String scanText) {
+    final colonMatch = RegExp(r"[:：]").firstMatch(scanText);
+    if (colonMatch == null) return null;
+    final colonIdx = colonMatch.start;
+    if (scanText.substring(colonIdx).startsWith("://")) return null;
+
+    final left = scanText.substring(0, colonIdx).trim();
+    final rightRaw = scanText.substring(colonIdx + 1);
+    final value = rightRaw.trim();
+    if (left.isEmpty || value.isEmpty) return null;
+
+    final kind = _classifyHeaderLine(left, allowUnknownEndColon: false);
+    if (kind == null || kind == _FieldHeaderKind.otherField) return null;
+
+    final relStart = rightRaw.indexOf(value);
+    if (relStart == -1) return null;
+    final absStart = colonIdx + 1 + relStart;
+    return (
+      kind: kind,
+      value: value,
+      valueStart: absStart,
+      valueEnd: absStart + value.length,
+    );
+  }
+
+  static bool _looksLikeIdValue(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.length < 4 || trimmed.length > 32) return false;
+    if (!RegExp(r"[\d\u0966-\u096F]").hasMatch(trimmed)) return false;
+    final normalised = _normaliseIndicDigits(trimmed);
+    if (!RegExp(r"^[A-Za-z0-9\s\-/.]+$").hasMatch(normalised)) return false;
+    final tokens = normalised.split(RegExp(r"\s+")).where((t) => t.isNotEmpty);
+    return tokens.length <= 6;
+  }
+
+  static bool _looksLikeNameValue(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.length < 2 || trimmed.length > 60) return false;
+    if (RegExp(r"[\d\u0966-\u096F]").hasMatch(trimmed)) return false;
+    if (RegExp(r"\p{L}", unicode: true).allMatches(trimmed).length < 2) {
+      return false;
+    }
+    if (_classifyHeaderLine(trimmed) != null) return false;
+    if (_detectMrzCandidate(trimmed) != null) return false;
+    return true;
+  }
+
+  static bool _looksLikeDobValue(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.length < 4 || trimmed.length > 45) return false;
+    if (!RegExp(r"[\d\u0966-\u096F]").hasMatch(trimmed)) return false;
+    if (_classifyHeaderLine(trimmed) != null) return false;
+    if (_detectMrzCandidate(trimmed) != null) return false;
+    return true;
+  }
+
+  static _PiiMatchCandidate? _buildHeaderValueCandidate({
+    required _FieldHeaderKind kind,
+    required String value,
+    required int start,
+    required int end,
+    required Set<RedactionPreset> presets,
+  }) {
+    switch (kind) {
+      case _FieldHeaderKind.id:
+        if (!presets.contains(RedactionPreset.ids) ||
+            !_looksLikeIdValue(value)) {
+          return null;
+        }
+        return _PiiMatchCandidate(
+          category: "id",
+          start: start,
+          end: end,
+          matchedText: value,
+          supportsKeepLast4: true,
+        );
+      case _FieldHeaderKind.address:
+        if (!presets.contains(RedactionPreset.addresses) || value.length < 4) {
+          return null;
+        }
+        return _PiiMatchCandidate(
+          category: "address",
+          start: start,
+          end: end,
+          matchedText: value,
+          supportsKeepLast4: false,
+        );
+      case _FieldHeaderKind.name:
+        final category = presets.contains(RedactionPreset.contacts)
+            ? "contact"
+            : (presets.contains(RedactionPreset.ids) ? "id" : null);
+        if (category == null || !_looksLikeNameValue(value)) {
+          return null;
+        }
+        return _PiiMatchCandidate(
+          category: category,
+          start: start,
+          end: end,
+          matchedText: value,
+          supportsKeepLast4: false,
+          maskPreviewOverride: "[REDACTED NAME]",
+        );
+      case _FieldHeaderKind.dob:
+        final category = presets.contains(RedactionPreset.ids)
+            ? "id"
+            : (presets.contains(RedactionPreset.contacts) ? "contact" : null);
+        if (category == null || !_looksLikeDobValue(value)) {
+          return null;
+        }
+        return _PiiMatchCandidate(
+          category: category,
+          start: start,
+          end: end,
+          matchedText: value,
+          supportsKeepLast4: false,
+          maskPreviewOverride: "[REDACTED DOB]",
+        );
+      case _FieldHeaderKind.otherField:
+        return null;
+    }
+  }
+
+  static void _propagateStackedHeaderCandidates({
+    required List<_IndexedLine> pageLines,
+    required Set<RedactionPreset> presets,
+    required Map<(int, int), List<_PiiMatchCandidate>> candidatesByLine,
+  }) {
+    if (pageLines.isEmpty) return;
+    final hasAnySpatialBox =
+        pageLines.where((l) => l.line.boundingBox != null).length >= 2;
+
+    for (final header in pageLines) {
+      if (!header.isStandaloneHeader) continue;
+      final kind = header.headerKind;
+      if (kind == null || kind == _FieldHeaderKind.otherField) continue;
+
+      final useSpatial = hasAnySpatialBox && header.line.boundingBox != null;
+      final maxSteps = kind == _FieldHeaderKind.address ? 3 : 1;
+      var anchor = header;
+      final visited = <(int, int)>{(header.blockIndex, header.lineIndex)};
+
+      for (var step = 0; step < maxSteps; step++) {
+        final _IndexedLine? nextLine = useSpatial
+            ? _findNextSpatialValueLine(
+                anchor: anchor,
+                pageLines: pageLines,
+                visited: visited,
+                gapFactor: step == 0 ? 2.2 : 1.8,
+              )
+            : _findNextBlockValueLine(
+                header: header,
+                step: step,
+                pageLines: pageLines,
+              );
+        if (nextLine == null) break;
+        visited.add((nextLine.blockIndex, nextLine.lineIndex));
+
+        final trimmed = nextLine.text.trim();
+        if (trimmed.isEmpty) break;
+        if (nextLine.headerKind != null) break;
+        final normalised = _normaliseIndicDigits(nextLine.text);
+        if (_detectMrzCandidate(normalised) != null) break;
+
+        if (kind == _FieldHeaderKind.address &&
+            !RegExp(r"[\p{L}\d]{2}", unicode: true).hasMatch(trimmed)) {
+          break;
+        }
+
+        final start = nextLine.text.indexOf(trimmed);
+        if (start == -1) break;
+        final candidate = _buildHeaderValueCandidate(
+          kind: kind,
+          value: trimmed,
+          start: start,
+          end: start + trimmed.length,
+          presets: presets,
+        );
+        if (candidate == null) break;
+
+        candidatesByLine
+            .putIfAbsent((nextLine.blockIndex, nextLine.lineIndex), () => [])
+            .add(candidate);
+        anchor = nextLine;
+      }
+    }
+  }
+
+  static _IndexedLine? _findNextBlockValueLine({
+    required _IndexedLine header,
+    required int step,
+    required List<_IndexedLine> pageLines,
+  }) {
+    final targetLineIndex = header.lineIndex + 1 + step;
+    for (final line in pageLines) {
+      if (line.blockIndex == header.blockIndex &&
+          line.lineIndex == targetLineIndex) {
+        return line;
+      }
+    }
+    return null;
+  }
+
+  static _IndexedLine? _findNextSpatialValueLine({
+    required _IndexedLine anchor,
+    required List<_IndexedLine> pageLines,
+    required Set<(int, int)> visited,
+    required double gapFactor,
+  }) {
+    final anchorBox = anchor.line.boundingBox;
+    if (anchorBox == null) return null;
+
+    final anchorHeight = math.max(1.0, anchorBox.height);
+    final anchorCenterY = (anchorBox.top + anchorBox.bottom) / 2.0;
+
+    final matches = <_IndexedLine>[];
+    for (final cand in pageLines) {
+      if (identical(cand, anchor) ||
+          visited.contains((cand.blockIndex, cand.lineIndex))) {
+        continue;
+      }
+      final candBox = cand.line.boundingBox;
+      if (candBox == null) continue;
+
+      final candHeight = math.max(1.0, candBox.height);
+      final candCenterY = (candBox.top + candBox.bottom) / 2.0;
+      if (candCenterY <=
+          anchorCenterY + math.min(anchorHeight, candHeight) * 0.25) {
+        continue;
+      }
+
+      final gapY = candBox.top - anchorBox.bottom;
+      final maxGapY = math.max(anchorHeight, candHeight) * gapFactor;
+      if (gapY < -anchorHeight * 0.35 || gapY > maxGapY) {
+        continue;
+      }
+
+      final overlapX =
+          math.min(anchorBox.right, candBox.right) -
+          math.max(anchorBox.left, candBox.left);
+      final minWidth = math.max(1.0, math.min(anchorBox.width, candBox.width));
+      final hasOverlap = overlapX >= minWidth * 0.2;
+      final leftAligned =
+          (candBox.left - anchorBox.left).abs() <=
+          math.max(anchorHeight, candHeight) * 2.5;
+      if (!hasOverlap && !leftAligned) continue;
+
+      if (candBox.left >= anchorBox.right + anchorHeight ||
+          candBox.right <= anchorBox.left - anchorHeight) {
+        continue;
+      }
+
+      matches.add(cand);
+    }
+
+    if (matches.isEmpty) return null;
+    matches.sort((a, b) {
+      final aBox = a.line.boundingBox!;
+      final bBox = b.line.boundingBox!;
+      final topDiff = aBox.top.compareTo(bBox.top);
+      if (topDiff != 0) return topDiff;
+      final aDx = (aBox.left - anchorBox.left).abs();
+      final bDx = (bBox.left - anchorBox.left).abs();
+      return aDx.compareTo(bDx);
+    });
+    return matches.first;
+  }
+
+  static void _mapBlockEntitiesToLines({
+    required int blockIndex,
+    required List<({String text, List<_ElementSpan> spans})> resolvedLines,
+    required List<ExtractedEntityItem> entities,
+    required Set<RedactionPreset> presets,
+    required Map<(int, int), List<_PiiMatchCandidate>> candidatesByLine,
+  }) {
+    final built = _buildResolvedBlockText(resolvedLines);
+    final blockText = built.blockText;
+    if (blockText.trim().isEmpty) return;
+
+    for (final item in entities) {
+      final ({String category, bool supportsKeepLast4})? mapping =
+          switch (item.type) {
+            "address" when presets.contains(RedactionPreset.addresses) => (
+              category: "address",
+              supportsKeepLast4: false,
+            ),
+            "iban" ||
+            "payment_card" when presets.contains(RedactionPreset.ids) => (
+              category: "id",
+              supportsKeepLast4: true,
+            ),
+            "email" ||
+            "phone" ||
+            "upi" when presets.contains(RedactionPreset.contacts) => (
+              category: "contact",
+              supportsKeepLast4: false,
+            ),
+            _ => null,
+          };
+      if (mapping == null) continue;
+
+      final trimmedRaw = item.rawValue.trim();
+      if (trimmedRaw.length < 5) continue;
+
+      final tokens = trimmedRaw
+          .split(RegExp(r"\s+"))
+          .where((t) => t.isNotEmpty)
+          .toList();
+      if (tokens.isEmpty) continue;
+
+      final pattern = RegExp(
+        tokens.map(RegExp.escape).join(r"\s+"),
+        caseSensitive: false,
+      );
+
+      for (final m in pattern.allMatches(blockText)) {
+        for (final range in built.lineRanges) {
+          if (m.start >= range.end || m.end <= range.start) continue;
+
+          final lineText = resolvedLines[range.lineIndex].text;
+          var localStart = math.max(0, m.start - range.start);
+          var localEnd = math.min(lineText.length, m.end - range.start);
+          while (localStart < localEnd &&
+              lineText[localStart].trim().isEmpty) {
+            localStart++;
+          }
+          while (localEnd > localStart &&
+              lineText[localEnd - 1].trim().isEmpty) {
+            localEnd--;
+          }
+          if (localEnd <= localStart) continue;
+
+          candidatesByLine
+              .putIfAbsent((blockIndex, range.lineIndex), () => [])
+              .add(
+                _PiiMatchCandidate(
+                  category: mapping.category,
+                  start: localStart,
+                  end: localEnd,
+                  matchedText: lineText.substring(localStart, localEnd),
+                  supportsKeepLast4: mapping.supportsKeepLast4,
+                ),
+              );
+        }
+      }
+    }
   }
 
   static List<_PiiMatchCandidate> _deduplicateCandidates(
@@ -847,6 +1784,7 @@ class PiiRedactionEngine {
     required String category,
     required String matchedText,
     required bool keepLast4,
+    String? maskPreviewOverride,
   }) {
     if (category == "id") {
       if (keepLast4) {
@@ -859,7 +1797,13 @@ class PiiRedactionEngine {
           return "••••$last4";
         }
       }
+      if (maskPreviewOverride != null) {
+        return maskPreviewOverride;
+      }
       return "[REDACTED ID]";
+    }
+    if (maskPreviewOverride != null) {
+      return maskPreviewOverride;
     }
     if (category == "contact") {
       if (_upiRegex.hasMatch(matchedText)) {
