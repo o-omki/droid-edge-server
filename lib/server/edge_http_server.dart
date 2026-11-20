@@ -64,6 +64,7 @@ class EdgeHttpServer {
           ocrEngine: _ocrEngine,
           faceDetectionEngine: _faceDetectionEngine,
           pdfRasterizer: _pdfRasterizer,
+          entityExtractionEngine: _entityExtractionEngine,
         );
     _localGenAiEngine = localGenAiEngine ??
         ThreeTierGenAiRuntime(
