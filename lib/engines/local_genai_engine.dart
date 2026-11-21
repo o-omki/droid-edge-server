@@ -8,6 +8,7 @@ import "package:google_mlkit_genai_prompt/google_mlkit_genai_prompt.dart";
 import "../models/ocr_result.dart";
 import "../models/openai_vision_models.dart";
 import "entity_extraction_engine.dart";
+import "litert_lm_engine.dart";
 
 /// Outcome of attempting optional Tier 2 (Gemini Nano) or Tier 3 (LiteRT-LM)
 /// refinement over the deterministic Tier 1 baseline.
@@ -56,20 +57,29 @@ abstract class LocalGenAiEngine {
     String? tier3ModelPath,
   });
 
+  /// Opens the local document picker to choose a sideloaded `.litertlm` model.
+  Future<String?> pickTier3ModelFile() async => null;
+
+  /// Returns the app-owned directory recommended for `adb push` model storage.
+  Future<String?> getTier3ModelsDirectory() async => null;
+
   Future<void> dispose();
 }
 
-/// Default 3-tier runtime manager
+/// Default 3-tier runtime manager.
 ///
 /// Tier 1 (Deterministic Spatial & Entity) is always ready. Tier 2 queries
-/// `google_mlkit_genai_prompt` safely, and Tier 3 exposes an opt-in pluggable
-/// local runtime slot for `.litertlm` models on 6 GB+ RAM devices without
-/// bundling heavy native FFI binaries in the base APK.
+/// `google_mlkit_genai_prompt` safely, and Tier 3 runs sideloaded `.litertlm`
+/// models via [LiteRtLmEngine] or a custom [LocalSlmRunner] on 5.5 GB+ RAM
+/// devices without bundling weights in the APK.
 class ThreeTierGenAiRuntime implements LocalGenAiEngine {
+  static const double minTier3RamGb = 5.5;
+
   ThreeTierGenAiRuntime({
     EntityExtractionEngine? entityExtractionEngine,
     Future<AiFeatureAvailability> Function()? tier2StatusChecker,
     Future<String?> Function(String prompt)? tier2Runner,
+    LiteRtLmEngine? liteRtLmEngine,
     LocalSlmRunner? tier3Runner,
     Future<double?> Function()? deviceRamGbProvider,
     Duration inferenceTimeout = const Duration(seconds: 6),
@@ -80,29 +90,32 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
          entityExtractionEngine: entityExtractionEngine,
          tier2StatusChecker: tier2StatusChecker,
          tier2Runner: tier2Runner,
-         tier3Runner: tier3Runner,
+         liteRtLmEngine: liteRtLmEngine,
+         tier3Runner: tier3Runner ?? liteRtLmEngine?.runInference,
          deviceRamGbProvider: deviceRamGbProvider,
          inferenceTimeout: inferenceTimeout,
          tier2Enabled: initialTier2Enabled,
          tier3Enabled: initialTier3Enabled,
-         tier3ModelPath: initialTier3ModelPath,
+         tier3ModelPath: _normaliseModelPath(initialTier3ModelPath),
        );
 
   ThreeTierGenAiRuntime._({
     this._entityExtractionEngine,
     this._tier2StatusChecker,
     this._tier2Runner,
+    this._liteRtLmEngine,
     this._tier3Runner,
     this._deviceRamGbProvider,
     required this._inferenceTimeout,
     required this._tier2Enabled,
     required this._tier3Enabled,
-    this._tier3ModelPath,
+    required this._tier3ModelPath,
   });
 
   final EntityExtractionEngine? _entityExtractionEngine;
   final Future<AiFeatureAvailability> Function()? _tier2StatusChecker;
   final Future<String?> Function(String prompt)? _tier2Runner;
+  final LiteRtLmEngine? _liteRtLmEngine;
   final LocalSlmRunner? _tier3Runner;
   final Future<double?> Function()? _deviceRamGbProvider;
   final Duration _inferenceTimeout;
@@ -111,8 +124,15 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
   bool _tier3Enabled;
   String? _tier3ModelPath;
   Prompt? _mlKitPrompt;
+  Future<void>? _pendingUnload;
 
   AiCapabilitiesSnapshot _snapshot = const AiCapabilitiesSnapshot();
+
+  static String? _normaliseModelPath(String? rawPath) {
+    if (rawPath == null) return null;
+    final trimmed = rawPath.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
 
   @override
   AiCapabilitiesSnapshot get currentCapabilities => _snapshot;
@@ -123,6 +143,9 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
     bool? tier3Enabled,
     String? tier3ModelPath,
   }) {
+    final previousEnabled = _tier3Enabled;
+    final previousModelPath = _tier3ModelPath;
+
     if (tier2Enabled != null) {
       _tier2Enabled = tier2Enabled;
     }
@@ -130,9 +153,15 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
       _tier3Enabled = tier3Enabled;
     }
     if (tier3ModelPath != null) {
-      final trimmed = tier3ModelPath.trim();
-      _tier3ModelPath = trimmed.isEmpty ? null : trimmed;
+      _tier3ModelPath = _normaliseModelPath(tier3ModelPath);
     }
+
+    final pathChanged = _tier3ModelPath != previousModelPath;
+    final disabledTier3 = previousEnabled && !_tier3Enabled;
+    if (pathChanged || disabledTier3) {
+      unawaited(_unloadTier3Model());
+    }
+
     _snapshot = _snapshot.copyWith(
       tier2Enabled: _tier2Enabled,
       tier3Enabled: _tier3Enabled,
@@ -153,11 +182,16 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
       tier3ModelPath: tier3ModelPath,
     );
 
+    final pendingUnload = _pendingUnload;
+    if (pendingUnload != null) {
+      await pendingUnload;
+    }
+
     final entityDownloaded =
         await (_entityExtractionEngine?.isNativeModelAvailable() ??
             Future<bool>.value(false));
     final tier2Status = await _probeTier2Status();
-    final ramGb = await (_deviceRamGbProvider?.call() ?? _readDeviceRamGb());
+    final ramGb = await _resolveDeviceRamGb();
     final tier3Status = await _probeTier3Status(ramGb: ramGb);
 
     _snapshot = AiCapabilitiesSnapshot(
@@ -183,15 +217,13 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
     String? requestedModel,
   }) async {
     final normalizedModel = (requestedModel ?? "").trim().toLowerCase();
-    final wantTier3 = _tier3Enabled &&
-        _tier3Runner != null &&
-        _tier3ModelPath != null &&
-        _snapshot.tier3Status == AiFeatureAvailability.available;
+    final explicitlyRequestedTier3 = normalizedModel == "gemma-local";
+    final shouldAttemptTier3 = _tier3Enabled || explicitlyRequestedTier3;
     final wantTier2 = (_tier2Enabled || normalizedModel == "gemini-nano") &&
         (_snapshot.tier2Status == AiFeatureAvailability.available ||
             _tier2Runner != null);
 
-    if (!wantTier3 && !wantTier2) {
+    if (!shouldAttemptTier3 && !wantTier2) {
       return const GenAiRefinementResult(
         tierUsed: AiTier.tier1Deterministic,
         fallbackTriggered: false,
@@ -208,11 +240,25 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
 
     var fallbackTriggered = false;
 
-    if (wantTier3) {
-      try {
-        final tier3Runner = _tier3Runner;
-        final modelPath = _tier3ModelPath;
-        if (modelPath != null) {
+    if (shouldAttemptTier3) {
+      final pendingUnload = _pendingUnload;
+      if (pendingUnload != null) {
+        await pendingUnload;
+      }
+
+      final ramGb = _snapshot.deviceRamGb ?? await _resolveDeviceRamGb();
+      final liveTier3Status = await _probeTier3Status(ramGb: ramGb);
+      _snapshot = _snapshot.copyWith(
+        tier3Status: liveTier3Status,
+        deviceRamGb: ramGb,
+      );
+
+      final tier3Runner = _tier3Runner;
+      final modelPath = _tier3ModelPath;
+      if (liveTier3Status == AiFeatureAvailability.available &&
+          tier3Runner != null &&
+          modelPath != null) {
+        try {
           final output = await tier3Runner(
             prompt: promptText,
             modelPath: modelPath,
@@ -226,9 +272,14 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
               fallbackTriggered: false,
             );
           }
+          fallbackTriggered = true;
+        } on TimeoutException {
+          unawaited(_cancelTier3Inference());
+          fallbackTriggered = true;
+        } catch (_) {
+          fallbackTriggered = true;
         }
-        fallbackTriggered = true;
-      } catch (_) {
+      } else {
         fallbackTriggered = true;
       }
     }
@@ -262,6 +313,70 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
     );
   }
 
+  @override
+  Future<String?> pickTier3ModelFile() async {
+    return _liteRtLmEngine?.pickModelFile();
+  }
+
+  @override
+  Future<String?> getTier3ModelsDirectory() async {
+    try {
+      return await _liteRtLmEngine?.getModelsDirectory();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _unloadTier3Model() {
+    final existing = _pendingUnload;
+    if (existing != null) {
+      return existing;
+    }
+    final engine = _liteRtLmEngine;
+    if (engine == null) {
+      return Future<void>.value();
+    }
+    final future = () async {
+      try {
+        await engine.unloadModel();
+      } catch (_) {
+      } finally {
+        _pendingUnload = null;
+      }
+    }();
+    _pendingUnload = future;
+    return future;
+  }
+
+  Future<void> _cancelTier3Inference() async {
+    try {
+      await _liteRtLmEngine?.cancelInference();
+    } catch (_) {}
+  }
+
+  Future<double?> _resolveDeviceRamGb() async {
+    final provider = _deviceRamGbProvider;
+    if (provider != null) {
+      try {
+        return await provider();
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final engine = _liteRtLmEngine;
+    if (engine != null) {
+      try {
+        final nativeRam = await engine.getDeviceRamGb();
+        if (nativeRam != null) {
+          return nativeRam;
+        }
+      } catch (_) {}
+    }
+
+    return _readDeviceRamGb();
+  }
+
   Future<AiFeatureAvailability> _probeTier2Status() async {
     final checker = _tier2StatusChecker;
     if (checker != null) {
@@ -290,17 +405,44 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
   }
 
   Future<AiFeatureAvailability> _probeTier3Status({double? ramGb}) async {
-    final modelPath = _tier3ModelPath;
-    if (_tier3Runner == null || modelPath == null || modelPath.isEmpty) {
+    if (_tier3Runner == null) {
       return AiFeatureAvailability.unavailable;
     }
+
+    final liteRtLmEngine = _liteRtLmEngine;
+    if (liteRtLmEngine != null) {
+      try {
+        final supported = await liteRtLmEngine.isSupported();
+        if (!supported) {
+          return AiFeatureAvailability.unavailable;
+        }
+      } catch (_) {
+        return AiFeatureAvailability.unavailable;
+      }
+    }
+
+    if (ramGb != null && ramGb < minTier3RamGb) {
+      return AiFeatureAvailability.unavailable;
+    }
+
+    final modelPath = _tier3ModelPath;
+    if (modelPath == null || modelPath.isEmpty) {
+      return AiFeatureAvailability.downloadable;
+    }
+
+    if (!modelPath.toLowerCase().endsWith(".litertlm")) {
+      return AiFeatureAvailability.unavailable;
+    }
+
     try {
-      final exists = await File(modelPath).exists();
+      final file = File(modelPath);
+      final exists = await file.exists();
       if (!exists) {
         return AiFeatureAvailability.downloadable;
       }
-      if (ramGb != null && ramGb < 5.5) {
-        return AiFeatureAvailability.unavailable;
+      final sizeBytes = await file.length();
+      if (sizeBytes <= 0) {
+        return AiFeatureAvailability.downloadable;
       }
       return AiFeatureAvailability.available;
     } catch (_) {
@@ -392,6 +534,13 @@ class ThreeTierGenAiRuntime implements LocalGenAiEngine {
     if (prompt != null) {
       try {
         await prompt.close();
+      } catch (_) {}
+    }
+
+    final liteRtLmEngine = _liteRtLmEngine;
+    if (liteRtLmEngine != null) {
+      try {
+        await liteRtLmEngine.dispose();
       } catch (_) {}
     }
   }
