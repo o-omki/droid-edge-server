@@ -13,6 +13,13 @@
         android:label="droid_edge_server"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Required on Android 12+ when LiteRT-LM uses the GPU/OpenCL backend -->
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

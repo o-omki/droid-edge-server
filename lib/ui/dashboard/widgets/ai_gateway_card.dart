@@ -13,6 +13,9 @@ class AiGatewayCard extends StatelessWidget {
     required this.onRefreshCapabilities,
     required this.onToggleTier2,
     required this.onClearHistory,
+    this.onToggleTier3,
+    this.onPickTier3Model,
+    this.onSetTier3ModelPath,
   });
 
   final AiGatewayState state;
@@ -20,6 +23,9 @@ class AiGatewayCard extends StatelessWidget {
   final VoidCallback onRefreshCapabilities;
   final ValueChanged<bool> onToggleTier2;
   final VoidCallback onClearHistory;
+  final ValueChanged<bool>? onToggleTier3;
+  final VoidCallback? onPickTier3Model;
+  final ValueChanged<String?>? onSetTier3ModelPath;
 
   Future<void> _copyBaseUrl(BuildContext context, String url) async {
     await Clipboard.setData(ClipboardData(text: url));
@@ -29,6 +35,23 @@ class AiGatewayCard extends StatelessWidget {
       ..showSnackBar(
         const SnackBar(content: Text("OpenAI Base URL copied to clipboard")),
       );
+  }
+
+  Future<void> _showSetModelPathDialog(BuildContext context) async {
+    final onSetPath = onSetTier3ModelPath;
+    if (onSetPath == null) return;
+
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (_) => _SetModelPathDialog(
+        initialPath: state.capabilities.tier3ModelPath ?? "",
+        modelsHintDir: state.tier3ModelsDirectory ?? "/sdcard/Download",
+      ),
+    );
+
+    if (result != null) {
+      onSetPath(result);
+    }
   }
 
   @override
@@ -58,16 +81,36 @@ class AiGatewayCard extends StatelessWidget {
         caps.tier2Status == AiFeatureAvailability.available ||
         caps.tier2Status == AiFeatureAvailability.downloadable;
 
+    final modelPath = caps.tier3ModelPath;
+    final fileName = (modelPath == null || modelPath.isEmpty)
+        ? null
+        : modelPath.split(RegExp(r"[/\\]")).last;
     final ramNote = caps.deviceRamGb != null
         ? " · ${caps.deviceRamGb!.toStringAsFixed(1)} GB RAM"
         : "";
     final tier3Label = switch (caps.tier3Status) {
-      AiFeatureAvailability.available => "Model Loaded$ramNote",
-      AiFeatureAvailability.downloadable => "Adapter Ready · Model Missing$ramNote",
-      AiFeatureAvailability.downloading => "Downloading…",
+      AiFeatureAvailability.available =>
+        "${caps.tier3Enabled ? "Ready (Enabled)" : "Ready (Off)"}"
+            "${fileName != null ? " · $fileName" : ""}$ramNote",
+      AiFeatureAvailability.downloadable =>
+        "${fileName != null ? "Model Missing · $fileName" : "Runtime Ready · Select .litertlm"}$ramNote",
+      AiFeatureAvailability.downloading => "Loading…",
       AiFeatureAvailability.disabled => "Disabled",
-      AiFeatureAvailability.unavailable => "Opt-in Slot (6 GB+ RAM)$ramNote",
+      AiFeatureAvailability.unavailable =>
+        caps.deviceRamGb != null && caps.deviceRamGb! < 5.5
+            ? "Requires 5.5 GB+ RAM$ramNote"
+            : (modelPath != null &&
+                    modelPath.isNotEmpty &&
+                    !modelPath.toLowerCase().endsWith(".litertlm"))
+                ? "Invalid model file (.litertlm required)$ramNote"
+                : "Opt-in Slot (6 GB+ RAM)$ramNote",
     };
+
+    final tier3CanToggle = onToggleTier3 != null &&
+        (caps.tier3Status == AiFeatureAvailability.available ||
+            caps.tier3Enabled);
+    final showTier3ModelControls =
+        onPickTier3Model != null || onSetTier3ModelPath != null;
 
     return Card(
       child: Padding(
@@ -178,6 +221,7 @@ class AiGatewayCard extends StatelessWidget {
               isActive: activeTier == AiTier.tier2GeminiNano,
               trailing: tier2CanToggle
                   ? Switch(
+                      key: const Key("tier2_switch"),
                       value: caps.tier2Enabled,
                       onChanged: onToggleTier2,
                     )
@@ -189,7 +233,122 @@ class AiGatewayCard extends StatelessWidget {
               title: "Local LiteRT-LM",
               subtitle: tier3Label,
               isActive: activeTier == AiTier.tier3LiteRtLm,
+              trailing: tier3CanToggle
+                  ? Switch(
+                      key: const Key("tier3_switch"),
+                      value: caps.tier3Enabled,
+                      onChanged: onToggleTier3,
+                    )
+                  : null,
             ),
+            if (showTier3ModelControls) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (modelPath != null && modelPath.isNotEmpty)
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.memory_rounded,
+                            size: 16,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              modelPath,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textTheme.labelSmall?.copyWith(
+                                fontFamily: "monospace",
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          if (onSetTier3ModelPath != null)
+                            IconButton(
+                              tooltip: "Clear model path",
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => onSetTier3ModelPath?.call(""),
+                              icon: const Icon(Icons.close_rounded, size: 16),
+                            ),
+                        ],
+                      )
+                    else if (state.tier3ModelsDirectory != null &&
+                        state.tier3ModelsDirectory!.isNotEmpty)
+                      Text(
+                        "Models folder: ${state.tier3ModelsDirectory}",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    if ((modelPath != null && modelPath.isNotEmpty) ||
+                        (state.tier3ModelsDirectory != null &&
+                            state.tier3ModelsDirectory!.isNotEmpty))
+                      const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (onPickTier3Model != null)
+                          OutlinedButton.icon(
+                            key: const Key("tier3_pick_model_btn"),
+                            onPressed: state.isSelectingTier3Model
+                                ? null
+                                : onPickTier3Model,
+                            icon: state.isSelectingTier3Model
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.folder_open_rounded,
+                                    size: 16,
+                                  ),
+                            label: Text(
+                              state.isSelectingTier3Model
+                                  ? "Importing…"
+                                  : "Select .litertlm",
+                            ),
+                          ),
+                        if (onSetTier3ModelPath != null)
+                          OutlinedButton.icon(
+                            key: const Key("tier3_set_path_btn"),
+                            onPressed: () => _showSetModelPathDialog(context),
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            label: const Text("Set Path"),
+                          ),
+                      ],
+                    ),
+                    if (state.tier3ErrorMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        state.tier3ErrorMessage!,
+                        style: textTheme.labelSmall?.copyWith(
+                          color: colorScheme.error,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Wrap(
               spacing: 12,
@@ -450,6 +609,75 @@ class _OpenAiJobRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SetModelPathDialog extends StatefulWidget {
+  const _SetModelPathDialog({
+    required this.initialPath,
+    required this.modelsHintDir,
+  });
+
+  final String initialPath;
+  final String modelsHintDir;
+
+  @override
+  State<_SetModelPathDialog> createState() => _SetModelPathDialogState();
+}
+
+class _SetModelPathDialogState extends State<_SetModelPathDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialPath);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text("LiteRT-LM Model Path"),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            key: const Key("tier3_model_path_input"),
+            controller: _controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: "Path to .litertlm model",
+              hintText: "/sdcard/Download/gemma.litertlm",
+              helperText: "Push via adb into ${widget.modelsHintDir}",
+              helperMaxLines: 2,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text("Cancel"),
+        ),
+        if (widget.initialPath.isNotEmpty)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(""),
+            child: const Text("Clear"),
+          ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text("Save"),
+        ),
+      ],
     );
   }
 }

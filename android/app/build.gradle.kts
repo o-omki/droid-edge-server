@@ -65,4 +65,7 @@ dependencies {
 
     // Bundled ML Kit Face Detection model (offline PII face redaction)
     implementation("com.google.mlkit:face-detection:16.1.7")
+
+    // Tier 3 on-device LiteRT-LM runtime (model weights are sideloaded, never bundled in the APK)
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.19.1")
 }

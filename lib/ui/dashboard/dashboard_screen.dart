@@ -151,6 +151,15 @@ class DashboardScreen extends StatelessWidget {
                           onToggleTier2: (enabled) => context
                               .read<AiGatewayCubit>()
                               .toggleTier2(enabled),
+                          onToggleTier3: (enabled) => context
+                              .read<AiGatewayCubit>()
+                              .toggleTier3(enabled),
+                          onPickTier3Model: () => context
+                              .read<AiGatewayCubit>()
+                              .pickTier3ModelFile(),
+                          onSetTier3ModelPath: (path) => context
+                              .read<AiGatewayCubit>()
+                              .setTier3ModelPath(path),
                           onClearHistory: () => context
                               .read<AiGatewayCubit>()
                               .clearHistory(),

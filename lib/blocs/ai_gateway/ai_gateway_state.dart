@@ -13,6 +13,9 @@ class AiGatewayState extends Equatable {
     this.fallbackCount = 0,
     this.recentJobs = const [],
     this.isCheckingCapabilities = false,
+    this.isSelectingTier3Model = false,
+    this.tier3ModelsDirectory,
+    this.tier3ErrorMessage,
   });
 
   final AiCapabilitiesSnapshot capabilities;
@@ -24,6 +27,9 @@ class AiGatewayState extends Equatable {
   final int fallbackCount;
   final List<OpenAiJobRecord> recentJobs;
   final bool isCheckingCapabilities;
+  final bool isSelectingTier3Model;
+  final String? tier3ModelsDirectory;
+  final String? tier3ErrorMessage;
 
   AiGatewayState copyWith({
     AiCapabilitiesSnapshot? capabilities,
@@ -35,6 +41,10 @@ class AiGatewayState extends Equatable {
     int? fallbackCount,
     List<OpenAiJobRecord>? recentJobs,
     bool? isCheckingCapabilities,
+    bool? isSelectingTier3Model,
+    String? tier3ModelsDirectory,
+    String? tier3ErrorMessage,
+    bool clearTier3Error = false,
   }) {
     return AiGatewayState(
       capabilities: capabilities ?? this.capabilities,
@@ -47,19 +57,28 @@ class AiGatewayState extends Equatable {
       recentJobs: recentJobs ?? this.recentJobs,
       isCheckingCapabilities:
           isCheckingCapabilities ?? this.isCheckingCapabilities,
+      isSelectingTier3Model:
+          isSelectingTier3Model ?? this.isSelectingTier3Model,
+      tier3ModelsDirectory: tier3ModelsDirectory ?? this.tier3ModelsDirectory,
+      tier3ErrorMessage: clearTier3Error
+          ? null
+          : (tier3ErrorMessage ?? this.tier3ErrorMessage),
     );
   }
 
   @override
   List<Object?> get props => [
-        capabilities,
-        totalCompletions,
-        tableExtractions,
-        receiptExtractions,
-        vcardExtractions,
-        ocrCompletions,
-        fallbackCount,
-        recentJobs,
-        isCheckingCapabilities,
-      ];
+    capabilities,
+    totalCompletions,
+    tableExtractions,
+    receiptExtractions,
+    vcardExtractions,
+    ocrCompletions,
+    fallbackCount,
+    recentJobs,
+    isCheckingCapabilities,
+    isSelectingTier3Model,
+    tier3ModelsDirectory,
+    tier3ErrorMessage,
+  ];
 }
