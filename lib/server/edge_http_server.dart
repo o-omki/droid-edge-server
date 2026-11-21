@@ -9,6 +9,7 @@ import "package:shelf_router/shelf_router.dart";
 import "../engines/barcode_engine.dart";
 import "../engines/entity_extraction_engine.dart";
 import "../engines/face_detection_engine.dart";
+import "../engines/litert_lm_engine.dart";
 import "../engines/local_genai_engine.dart";
 import "../engines/ocr_engine.dart";
 import "../engines/pdf_rasterizer.dart";
@@ -41,6 +42,7 @@ class EdgeHttpServer {
     SearchablePdfEngine? searchablePdfEngine,
     PiiRedactionEngine? piiRedactionEngine,
     EntityExtractionEngine? entityExtractionEngine,
+    LiteRtLmEngine? liteRtLmEngine,
     LocalGenAiEngine? localGenAiEngine,
     VisionChatPipeline? visionChatPipeline,
     this.webAssetLoader,
@@ -53,7 +55,8 @@ class EdgeHttpServer {
             faceDetectionEngine ?? MlKitFaceDetectionEngine(),
         _pdfRasterizer = pdfRasterizer ?? PdfxDocumentRasterizer(),
         _entityExtractionEngine =
-            entityExtractionEngine ?? HybridEntityExtractionEngine() {
+            entityExtractionEngine ?? HybridEntityExtractionEngine(),
+        _liteRtLmEngine = liteRtLmEngine ?? MethodChannelLiteRtLmEngine() {
     _searchablePdfEngine = searchablePdfEngine ??
         SearchablePdfEngine(
           ocrEngine: _ocrEngine,
@@ -69,6 +72,9 @@ class EdgeHttpServer {
     _localGenAiEngine = localGenAiEngine ??
         ThreeTierGenAiRuntime(
           entityExtractionEngine: _entityExtractionEngine,
+          liteRtLmEngine: _liteRtLmEngine,
+          tier3Runner: _liteRtLmEngine.runInference,
+          inferenceTimeout: const Duration(seconds: 30),
         );
     _visionChatPipeline = visionChatPipeline ??
         VisionChatPipeline(
@@ -87,6 +93,7 @@ class EdgeHttpServer {
   late final SearchablePdfEngine _searchablePdfEngine;
   late final PiiRedactionEngine _piiRedactionEngine;
   final EntityExtractionEngine _entityExtractionEngine;
+  final LiteRtLmEngine _liteRtLmEngine;
   late final LocalGenAiEngine _localGenAiEngine;
   late final VisionChatPipeline _visionChatPipeline;
   final WebAssetLoader? webAssetLoader;
@@ -215,6 +222,7 @@ class EdgeHttpServer {
     await _pdfRasterizer.dispose();
     await _entityExtractionEngine.dispose();
     await _localGenAiEngine.dispose();
+    await _liteRtLmEngine.dispose();
     await _logController.close();
     await _documentJobController.close();
     await _openAiJobController.close();
