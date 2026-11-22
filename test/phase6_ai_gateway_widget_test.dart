@@ -158,7 +158,7 @@ void main() {
     });
 
     testWidgets(
-      "supports Tier 3 .litertlm model picking, path dialog, toggle, and error banner",
+      "supports Tier 3 .litertlm model picking, toggle, clear, and error banner",
       (WidgetTester tester) async {
       Future<void> pumpWithIo({bool Function()? doneWhen}) async {
         for (var i = 0; i < 40; i++) {
@@ -182,8 +182,6 @@ void main() {
 
       final pickedModel = File("${tempDir.path}/gemma-picked.litertlm")
         ..writeAsBytesSync(List<int>.filled(64, 1));
-      final manualModel = File("${tempDir.path}/gemma-manual.litertlm")
-        ..writeAsBytesSync(List<int>.filled(64, 2));
 
       final controller = StreamController<OpenAiJobRecord>.broadcast();
       addTearDown(controller.close);
@@ -241,7 +239,7 @@ void main() {
       expect(find.text("Tier 1 Active"), findsOneWidget);
       expect(find.byKey(const Key("tier3_switch")), findsNothing);
       expect(find.byKey(const Key("tier3_pick_model_btn")), findsOneWidget);
-      expect(find.byKey(const Key("tier3_set_path_btn")), findsOneWidget);
+      expect(find.byKey(const Key("tier3_clear_model_btn")), findsNothing);
 
       // 1. Pick a .litertlm model file -> auto-enables Tier 3.
       await tester.tap(find.byKey(const Key("tier3_pick_model_btn")));
@@ -255,6 +253,7 @@ void main() {
       );
       expect(find.text("Tier 3 LiteRT-LM"), findsOneWidget);
       expect(find.byKey(const Key("tier3_switch")), findsOneWidget);
+      expect(find.byKey(const Key("tier3_clear_model_btn")), findsOneWidget);
       expect(
         find.textContaining("Ready (Enabled) · gemma-picked.litertlm"),
         findsOneWidget,
@@ -269,23 +268,15 @@ void main() {
       expect(cubit.state.capabilities.tier3Enabled, isFalse);
       expect(find.text("Tier 1 Active"), findsOneWidget);
 
-      // 3. Enter manual model path via Set Path dialog.
-      await tester.tap(find.byKey(const Key("tier3_set_path_btn")));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key("tier3_model_path_input")),
-        manualModel.path,
-      );
-      await tester.tap(find.text("Save"));
+      // 3. Clear selected model path.
+      await tester.tap(find.byKey(const Key("tier3_clear_model_btn")));
       await tester.pump();
       await pumpWithIo(
-        doneWhen: () =>
-            cubit.state.capabilities.tier3ModelPath == manualModel.path &&
-            cubit.state.capabilities.tier3Enabled,
+        doneWhen: () => cubit.state.capabilities.tier3ModelPath == null,
       );
-      expect(cubit.state.capabilities.tier3ModelPath, manualModel.path);
-      expect(cubit.state.capabilities.tier3Enabled, isTrue);
-      expect(find.text("Tier 3 LiteRT-LM"), findsOneWidget);
+      expect(cubit.state.capabilities.tier3ModelPath, isNull);
+      expect(find.byKey(const Key("tier3_clear_model_btn")), findsNothing);
+      expect(find.byKey(const Key("tier3_switch")), findsNothing);
 
       // 4. Invalid file picker error shows inline error banner.
       fakeLiteRt.pickException = PlatformException(

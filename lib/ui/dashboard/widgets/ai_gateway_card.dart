@@ -37,23 +37,6 @@ class AiGatewayCard extends StatelessWidget {
       );
   }
 
-  Future<void> _showSetModelPathDialog(BuildContext context) async {
-    final onSetPath = onSetTier3ModelPath;
-    if (onSetPath == null) return;
-
-    final result = await showDialog<String?>(
-      context: context,
-      builder: (_) => _SetModelPathDialog(
-        initialPath: state.capabilities.tier3ModelPath ?? "",
-        modelsHintDir: state.tier3ModelsDirectory ?? "/sdcard/Download",
-      ),
-    );
-
-    if (result != null) {
-      onSetPath(result);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -109,8 +92,11 @@ class AiGatewayCard extends StatelessWidget {
     final tier3CanToggle = onToggleTier3 != null &&
         (caps.tier3Status == AiFeatureAvailability.available ||
             caps.tier3Enabled);
+    final hasModelPath = modelPath != null && modelPath.isNotEmpty;
     final showTier3ModelControls =
-        onPickTier3Model != null || onSetTier3ModelPath != null;
+        onPickTier3Model != null ||
+        (hasModelPath && onSetTier3ModelPath != null) ||
+        state.tier3ErrorMessage != null;
 
     return Card(
       child: Padding(
@@ -243,111 +229,53 @@ class AiGatewayCard extends StatelessWidget {
             ),
             if (showTier3ModelControls) ...[
               const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (modelPath != null && modelPath.isNotEmpty)
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.memory_rounded,
-                            size: 16,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              modelPath,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: textTheme.labelSmall?.copyWith(
-                                fontFamily: "monospace",
-                                color: colorScheme.onSurfaceVariant,
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (onPickTier3Model != null)
+                    OutlinedButton.icon(
+                      key: const Key("tier3_pick_model_btn"),
+                      onPressed: state.isSelectingTier3Model
+                          ? null
+                          : onPickTier3Model,
+                      icon: state.isSelectingTier3Model
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
                               ),
+                            )
+                          : const Icon(
+                              Icons.folder_open_rounded,
+                              size: 16,
                             ),
-                          ),
-                          if (onSetTier3ModelPath != null)
-                            IconButton(
-                              tooltip: "Clear model path",
-                              visualDensity: VisualDensity.compact,
-                              onPressed: () => onSetTier3ModelPath?.call(""),
-                              icon: const Icon(Icons.close_rounded, size: 16),
-                            ),
-                        ],
-                      )
-                    else if (state.tier3ModelsDirectory != null &&
-                        state.tier3ModelsDirectory!.isNotEmpty)
-                      Text(
-                        "Models folder: ${state.tier3ModelsDirectory}",
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
+                      label: Text(
+                        state.isSelectingTier3Model
+                            ? "Importing…"
+                            : "Select .litertlm",
                       ),
-                    if ((modelPath != null && modelPath.isNotEmpty) ||
-                        (state.tier3ModelsDirectory != null &&
-                            state.tier3ModelsDirectory!.isNotEmpty))
-                      const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        if (onPickTier3Model != null)
-                          OutlinedButton.icon(
-                            key: const Key("tier3_pick_model_btn"),
-                            onPressed: state.isSelectingTier3Model
-                                ? null
-                                : onPickTier3Model,
-                            icon: state.isSelectingTier3Model
-                                ? const SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(
-                                    Icons.folder_open_rounded,
-                                    size: 16,
-                                  ),
-                            label: Text(
-                              state.isSelectingTier3Model
-                                  ? "Importing…"
-                                  : "Select .litertlm",
-                            ),
-                          ),
-                        if (onSetTier3ModelPath != null)
-                          OutlinedButton.icon(
-                            key: const Key("tier3_set_path_btn"),
-                            onPressed: () => _showSetModelPathDialog(context),
-                            icon: const Icon(Icons.edit_outlined, size: 16),
-                            label: const Text("Set Path"),
-                          ),
-                      ],
                     ),
-                    if (state.tier3ErrorMessage != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        state.tier3ErrorMessage!,
-                        style: textTheme.labelSmall?.copyWith(
-                          color: colorScheme.error,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
+                  if (hasModelPath && onSetTier3ModelPath != null)
+                    TextButton.icon(
+                      key: const Key("tier3_clear_model_btn"),
+                      onPressed: () => onSetTier3ModelPath?.call(""),
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                      label: const Text("Clear"),
+                    ),
+                ],
               ),
+              if (state.tier3ErrorMessage != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  state.tier3ErrorMessage!,
+                  style: textTheme.labelSmall?.copyWith(
+                    color: colorScheme.error,
+                  ),
+                ),
+              ],
             ],
             const SizedBox(height: 12),
             Wrap(
@@ -609,75 +537,6 @@ class _OpenAiJobRow extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _SetModelPathDialog extends StatefulWidget {
-  const _SetModelPathDialog({
-    required this.initialPath,
-    required this.modelsHintDir,
-  });
-
-  final String initialPath;
-  final String modelsHintDir;
-
-  @override
-  State<_SetModelPathDialog> createState() => _SetModelPathDialogState();
-}
-
-class _SetModelPathDialogState extends State<_SetModelPathDialog> {
-  late final TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initialPath);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text("LiteRT-LM Model Path"),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            key: const Key("tier3_model_path_input"),
-            controller: _controller,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: "Path to .litertlm model",
-              hintText: "/sdcard/Download/gemma.litertlm",
-              helperText: "Push via adb into ${widget.modelsHintDir}",
-              helperMaxLines: 2,
-              border: const OutlineInputBorder(),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text("Cancel"),
-        ),
-        if (widget.initialPath.isNotEmpty)
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(""),
-            child: const Text("Clear"),
-          ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text),
-          child: const Text("Save"),
-        ),
-      ],
     );
   }
 }
