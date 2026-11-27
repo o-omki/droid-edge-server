@@ -12,8 +12,10 @@ import "blocs/telemetry/telemetry_cubit.dart";
 import "core/theme/app_theme.dart";
 import "server/edge_http_server.dart";
 import "services/foreground_service_manager.dart";
+import "services/local_ca_service.dart";
 import "services/mdns_service.dart";
 import "services/network_info_service.dart";
+import "services/pairing_token_service.dart";
 import "services/telemetry_service.dart";
 import "ui/dashboard/dashboard_screen.dart";
 
@@ -25,6 +27,9 @@ class DroidEdgeApp extends StatefulWidget {
     this.telemetryService,
     this.foregroundServiceManager,
     this.mdnsService,
+    this.pairingTokenService,
+    this.localCaService,
+    this.enableTls = true,
   });
 
   final EdgeHttpServer? httpServer;
@@ -32,6 +37,9 @@ class DroidEdgeApp extends StatefulWidget {
   final TelemetryService? telemetryService;
   final ForegroundServiceManager? foregroundServiceManager;
   final MdnsService? mdnsService;
+  final PairingTokenService? pairingTokenService;
+  final LocalCaService? localCaService;
+  final bool enableTls;
 
   @override
   State<DroidEdgeApp> createState() => _DroidEdgeAppState();
@@ -43,6 +51,8 @@ class _DroidEdgeAppState extends State<DroidEdgeApp> {
   late final NetworkInfoService _networkInfoService;
   late final ForegroundServiceManager _foregroundServiceManager;
   late final MdnsService _mdnsService;
+  late final PairingTokenService _pairingTokenService;
+  late final LocalCaService _localCaService;
   late final bool _ownsServer;
   ThemeMode _themeMode = ThemeMode.dark;
 
@@ -61,6 +71,8 @@ class _DroidEdgeAppState extends State<DroidEdgeApp> {
     _foregroundServiceManager =
         widget.foregroundServiceManager ?? ForegroundServiceManager();
     _mdnsService = widget.mdnsService ?? MdnsService();
+    _pairingTokenService = widget.pairingTokenService ?? PairingTokenService();
+    _localCaService = widget.localCaService ?? LocalCaService();
   }
 
   @override
@@ -85,7 +97,11 @@ class _DroidEdgeAppState extends State<DroidEdgeApp> {
             networkInfoService: _networkInfoService,
             foregroundServiceManager: _foregroundServiceManager,
             mdnsService: _mdnsService,
+            pairingTokenService: _pairingTokenService,
+            localCaService: _localCaService,
+            enableTls: widget.enableTls,
           )
+            ..add(const ServerSecurityInitialized())
             ..add(const ServerIpRefreshRequested())
             ..add(const ServerBatteryOptimizationChecked()),
         ),

@@ -33,7 +33,18 @@
     processingKey: null,
   };
 
+  const TOKEN_STORAGE_KEY = "droid_edge_bearer_token";
+
   const els = {
+    authBtn: document.getElementById("authBtn"),
+    authDot: document.getElementById("authDot"),
+    authBtnText: document.getElementById("authBtnText"),
+    authModal: document.getElementById("authModal"),
+    authForm: document.getElementById("authForm"),
+    authTokenInput: document.getElementById("authTokenInput"),
+    authErrorText: document.getElementById("authErrorText"),
+    authCloseBtn: document.getElementById("authCloseBtn"),
+    authDisconnectBtn: document.getElementById("authDisconnectBtn"),
     serverStatusDot: document.getElementById("serverStatusDot"),
     serverStatusText: document.getElementById("serverStatusText"),
     modeBtns: Array.from(document.querySelectorAll(".mode-btn")),
@@ -130,9 +141,98 @@
     return Boolean(item.ocrData);
   }
 
-  async function pollServerStatus() {
+  function getPairingToken() {
     try {
-      const res = await fetch("/v1/status", { cache: "no-store" });
+      return (sessionStorage.getItem(TOKEN_STORAGE_KEY) || "").trim();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function setPairingToken(token) {
+    const clean = (token || "").trim();
+    try {
+      if (clean) {
+        sessionStorage.setItem(TOKEN_STORAGE_KEY, clean);
+      } else {
+        sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      }
+    } catch (_) {}
+    updateAuthUi();
+  }
+
+  function consumeTokenFromUrlHash() {
+    const rawHash = window.location.hash || "";
+    if (!rawHash || rawHash.length < 2) return;
+    const params = new URLSearchParams(rawHash.slice(1));
+    const token = params.get("token");
+    if (token && token.trim()) {
+      setPairingToken(token.trim());
+      params.delete("token");
+      const remaining = params.toString();
+      const nextUrl =
+        window.location.pathname +
+        window.location.search +
+        (remaining ? `#${remaining}` : "");
+      window.history.replaceState(null, "", nextUrl);
+    }
+  }
+
+  function updateAuthUi() {
+    const paired = Boolean(getPairingToken());
+    if (els.authDot) {
+      els.authDot.className = paired ? "dot online" : "dot";
+    }
+    if (els.authBtnText) {
+      els.authBtnText.textContent = paired ? "Paired" : "Pair Token";
+    }
+    if (els.authDisconnectBtn) {
+      els.authDisconnectBtn.classList.toggle("hidden", !paired);
+    }
+  }
+
+  function openAuthModal(errorMessage = "") {
+    if (!els.authModal) return;
+    if (els.authErrorText) {
+      els.authErrorText.textContent = errorMessage;
+      els.authErrorText.classList.toggle("hidden", !errorMessage);
+    }
+    if (els.authTokenInput) {
+      els.authTokenInput.value = getPairingToken();
+    }
+    if (!els.authModal.open && typeof els.authModal.showModal === "function") {
+      els.authModal.showModal();
+    }
+  }
+
+  function closeAuthModal() {
+    if (els.authModal && els.authModal.open) {
+      els.authModal.close();
+    }
+  }
+
+  async function apiFetch(url, options = {}) {
+    const token = getPairingToken();
+    const headers = new Headers(options.headers || {});
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+    const response = await fetch(url, { ...options, headers });
+    if (response.status === 401) {
+      setPairingToken("");
+      openAuthModal("Pairing token required or expired.");
+    }
+    return response;
+  }
+
+  async function pollServerStatus() {
+    if (!getPairingToken()) {
+      els.serverStatusDot.className = "dot";
+      els.serverStatusText.textContent = "Pairing required";
+      return;
+    }
+    try {
+      const res = await apiFetch("/v1/status", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       els.serverStatusDot.className = "dot online";
@@ -144,7 +244,9 @@
       els.serverStatusText.textContent = `${host}${battery}`;
     } catch (_) {
       els.serverStatusDot.className = "dot offline";
-      els.serverStatusText.textContent = "Server unreachable";
+      els.serverStatusText.textContent = getPairingToken()
+        ? "Server unreachable"
+        : "Pairing required";
     }
   }
 
@@ -539,7 +641,7 @@
           requestBody.response_format = { type: "json_object" };
         }
 
-        const response = await fetch("/v1/chat/completions", {
+        const response = await apiFetch("/v1/chat/completions", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(requestBody),
@@ -602,7 +704,7 @@
     }
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await apiFetch(endpoint, {
         method: "POST",
         body: formData,
       });
@@ -1617,7 +1719,7 @@
         }
       }
 
-      const response = await fetch(`/v1/doc/batch-zip?${qs.toString()}`, {
+      const response = await apiFetch(`/v1/doc/batch-zip?${qs.toString()}`, {
         method: "POST",
         body: formData,
       });
@@ -1934,6 +2036,38 @@
   }
   window.addEventListener("resize", syncOverlayBounds);
 
+  if (els.authBtn) {
+    els.authBtn.addEventListener("click", () => openAuthModal(""));
+  }
+  if (els.authCloseBtn) {
+    els.authCloseBtn.addEventListener("click", closeAuthModal);
+  }
+  if (els.authDisconnectBtn) {
+    els.authDisconnectBtn.addEventListener("click", () => {
+      setPairingToken("");
+      closeAuthModal();
+      pollServerStatus();
+    });
+  }
+  if (els.authForm) {
+    els.authForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const candidate = (els.authTokenInput?.value || "").trim();
+      if (!candidate) return;
+      setPairingToken(candidate);
+      const res = await apiFetch("/v1/status", { cache: "no-store" });
+      if (res.ok) {
+        closeAuthModal();
+        pollServerStatus();
+      } else if (els.authErrorText && res.status === 401) {
+        els.authErrorText.textContent = "Invalid pairing token.";
+        els.authErrorText.classList.remove("hidden");
+      }
+    });
+  }
+
+  consumeTokenFromUrlHash();
+  updateAuthUi();
   updateToolbarVisibility();
   pollServerStatus();
   setInterval(pollServerStatus, 10000);

@@ -31,6 +31,10 @@ void main() {
       addTearDown(client.close);
 
       final request = await client.get("127.0.0.1", port, "/v1/health");
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       final response = await request.close();
       final body = await utf8.decoder.bind(response).join();
 
@@ -60,6 +64,10 @@ void main() {
       addTearDown(client.close);
 
       final request = await client.get("127.0.0.1", port, "/unknown");
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       final response = await request.close();
       final body = await utf8.decoder.bind(response).join();
 
@@ -91,6 +99,10 @@ void main() {
       addTearDown(client.close);
 
       final request = await client.get("127.0.0.1", port, "/v1/status");
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${statusServer.authToken}",
+      );
       final response = await request.close();
       final body = await utf8.decoder.bind(response).join();
 

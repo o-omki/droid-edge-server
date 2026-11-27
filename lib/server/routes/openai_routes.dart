@@ -67,15 +67,15 @@ class OpenAiRoutes {
   Future<Response> _handleGetCapabilities(Request request) async {
     final caps = await localGenAiEngine.checkCapabilities();
     return Response.ok(
-      jsonEncode({
-        "status": "ok",
-        ...caps.toJson(),
-      }),
+      jsonEncode({"status": "ok", ...caps.toJson()}),
       headers: const {"content-type": "application/json; charset=utf-8"},
     );
   }
 
   Future<Response> _handleUpdateCapabilities(Request request) async {
+    if (!_isJsonContentType(request)) {
+      return _unsupportedMediaType();
+    }
     try {
       final rawText = await request.readAsString();
       if (rawText.trim().isNotEmpty) {
@@ -96,10 +96,7 @@ class OpenAiRoutes {
 
       final caps = await localGenAiEngine.checkCapabilities();
       return Response.ok(
-        jsonEncode({
-          "status": "ok",
-          ...caps.toJson(),
-        }),
+        jsonEncode({"status": "ok", ...caps.toJson()}),
         headers: const {"content-type": "application/json; charset=utf-8"},
       );
     } on FormatException {
@@ -108,6 +105,9 @@ class OpenAiRoutes {
   }
 
   Future<Response> _handleChatCompletions(Request request) async {
+    if (!_isJsonContentType(request)) {
+      return _unsupportedMediaType();
+    }
     try {
       final rawBody = await request.readAsString();
       if (rawBody.trim().isEmpty) {
@@ -132,7 +132,10 @@ class OpenAiRoutes {
 
       final response = await visionChatPipeline.complete(parsedRequest);
 
-      final preview = parsedRequest.prompt.trim().replaceAll(RegExp(r"\s+"), " ");
+      final preview = parsedRequest.prompt.trim().replaceAll(
+        RegExp(r"\s+"),
+        " ",
+      );
       onJobCompleted?.call(
         OpenAiJobRecord(
           id: response.id,
@@ -141,8 +144,9 @@ class OpenAiRoutes {
           effectiveTier: response.tierUsed,
           intent: response.intent,
           imageCount: parsedRequest.imagePayloads.length,
-          promptPreview:
-              preview.length > 72 ? "${preview.substring(0, 72)}…" : preview,
+          promptPreview: preview.length > 72
+              ? "${preview.substring(0, 72)}…"
+              : preview,
           promptTokens: response.promptTokens,
           completionTokens: response.completionTokens,
           processingMs: response.processingMs,
@@ -235,11 +239,11 @@ class OpenAiRoutes {
       allImages.add(decoded);
     }
 
-    final effectiveImages =
-        latestUserImages.isNotEmpty ? latestUserImages : allImages;
+    final effectiveImages = latestUserImages.isNotEmpty
+        ? latestUserImages
+        : allImages;
 
-    final primaryUserPrompt =
-        userPrompts.isNotEmpty ? userPrompts.last : "";
+    final primaryUserPrompt = userPrompts.isNotEmpty ? userPrompts.last : "";
     final combinedPrompt = [
       ...systemPrompts,
       if (primaryUserPrompt.isNotEmpty) primaryUserPrompt,
@@ -376,7 +380,9 @@ class OpenAiRoutes {
         base64Decode(encoded.replaceAll(RegExp(r"\s+"), "")),
       );
       if (bytes.isEmpty) {
-        throw const ImagePayloadException("Decoded image_url payload is empty.");
+        throw const ImagePayloadException(
+          "Decoded image_url payload is empty.",
+        );
       }
       return bytes;
     } on FormatException {
@@ -396,6 +402,24 @@ class OpenAiRoutes {
       "created": _modelCreatedEpoch,
       "owned_by": ownedBy,
     };
+  }
+
+  static bool _isJsonContentType(Request request) {
+    final raw = request.headers["content-type"];
+    if (raw == null || raw.trim().isEmpty) return false;
+    final mediaType = raw.split(";").first.trim().toLowerCase();
+    return mediaType == "application/json";
+  }
+
+  static Response _unsupportedMediaType() {
+    return Response(
+      415,
+      body: jsonEncode({
+        "error": "unsupported_media_type",
+        "message": "Content-Type must be application/json.",
+      }),
+      headers: const {"content-type": "application/json; charset=utf-8"},
+    );
   }
 
   static Response _badRequest(String message) {

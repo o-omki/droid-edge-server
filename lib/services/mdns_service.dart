@@ -25,16 +25,16 @@ class MdnsService {
   Future<void> start({
     required String ipAddress,
     required int port,
+    bool tlsEnabled = true,
   }) async {
     await stop();
     _advertisedIp = ipAddress;
     _isRunning = true;
 
-    await _startBonsoir(port: port);
+    await _startBonsoir(port: port, tlsEnabled: tlsEnabled);
     await _startARecordResponder(ipAddress: ipAddress);
   }
 
-  /// Stops all mDNS advertisements and closes the UDP multicast socket.
   Future<void> stop() async {
     _isRunning = false;
     _advertisedIp = null;
@@ -53,14 +53,18 @@ class MdnsService {
     }
   }
 
-  Future<void> _startBonsoir({required int port}) async {
+  Future<void> _startBonsoir({
+    required int port,
+    required bool tlsEnabled,
+  }) async {
     try {
       final service = BonsoirService(
         name: "Droid Edge Server",
-        type: "_http._tcp",
+        type: tlsEnabled ? "_https._tcp" : "_http._tcp",
         port: port,
         attributes: {
           "hostname": hostname,
+          "scheme": tlsEnabled ? "https" : "http",
           "status": "/v1/status",
           "health": "/v1/health",
         },
@@ -242,4 +246,3 @@ class MdnsService {
     return null;
   }
 }
-

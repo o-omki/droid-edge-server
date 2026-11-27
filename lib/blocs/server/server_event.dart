@@ -37,3 +37,13 @@ final class ServerBatteryOptimizationRequested extends ServerEvent {
   const ServerBatteryOptimizationRequested();
 }
 
+/// Loads or initialises the persistent pairing token and Local Root CA.
+final class ServerSecurityInitialized extends ServerEvent {
+  const ServerSecurityInitialized();
+}
+
+/// Rotates the per-device Bearer pairing token and updates the live server.
+final class ServerTokenRotateRequested extends ServerEvent {
+  const ServerTokenRotateRequested();
+}
+

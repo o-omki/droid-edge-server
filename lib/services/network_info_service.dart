@@ -1,13 +1,28 @@
+import "dart:async";
 import "dart:io";
 
+import "package:connectivity_plus/connectivity_plus.dart";
 import "package:network_info_plus/network_info_plus.dart";
 
-/// Looks up the device's active local LAN or Wi-Fi IPv4 address.
+/// Looks up the device's active local LAN or Wi-Fi IPv4 address and exposes
+/// connectivity change notifications.
 class NetworkInfoService {
-  NetworkInfoService({NetworkInfo? networkInfo})
-      : _networkInfo = networkInfo ?? NetworkInfo();
+  NetworkInfoService({NetworkInfo? networkInfo, Connectivity? connectivity})
+    : _networkInfo = networkInfo ?? NetworkInfo(),
+      _connectivity = connectivity ?? Connectivity();
 
   final NetworkInfo _networkInfo;
+  final Connectivity _connectivity;
+
+  /// Stream of OS network connectivity changes used to trigger a clean server
+  /// rebind on Wi-Fi reconnect or DHCP IP renewal.
+  Stream<List<ConnectivityResult>> get onConnectivityChanged {
+    try {
+      return _connectivity.onConnectivityChanged.handleError((_) {});
+    } catch (_) {
+      return const Stream<List<ConnectivityResult>>.empty();
+    }
+  }
 
   /// Returns the Wi-Fi IPv4 address where available, falling back to
   /// active network interfaces and finally `127.0.0.1`.
@@ -64,4 +79,3 @@ class NetworkInfoService {
     return false;
   }
 }
-

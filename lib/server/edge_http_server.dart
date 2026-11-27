@@ -20,6 +20,7 @@ import "../models/document_pipeline_models.dart";
 import "../models/openai_vision_models.dart";
 import "../models/request_log_entry.dart";
 import "../models/telemetry_snapshot.dart";
+import "../services/pairing_token_service.dart";
 import "routes/barcode_routes.dart";
 import "routes/document_routes.dart";
 import "routes/health_routes.dart";
@@ -47,36 +48,44 @@ class EdgeHttpServer {
     VisionChatPipeline? visionChatPipeline,
     this.webAssetLoader,
     this.hostname = "android-edge.local",
-  })  : _telemetryProvider = telemetryProvider ??
-            (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc())),
-        _ocrEngine = ocrEngine ?? MlKitOcrEngine(),
-        _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine(),
-        _faceDetectionEngine =
-            faceDetectionEngine ?? MlKitFaceDetectionEngine(),
-        _pdfRasterizer = pdfRasterizer ?? PdfxDocumentRasterizer(),
-        _entityExtractionEngine =
-            entityExtractionEngine ?? HybridEntityExtractionEngine(),
-        _liteRtLmEngine = liteRtLmEngine ?? MethodChannelLiteRtLmEngine() {
-    _searchablePdfEngine = searchablePdfEngine ??
+    String? authToken,
+  }) : _telemetryProvider =
+           telemetryProvider ??
+           (() => TelemetrySnapshot(timestamp: DateTime.now().toUtc())),
+       _authToken = (authToken != null && authToken.trim().isNotEmpty)
+           ? authToken.trim()
+           : PairingTokenService.generateToken(),
+       _ocrEngine = ocrEngine ?? MlKitOcrEngine(),
+       _barcodeEngine = barcodeEngine ?? MlKitBarcodeEngine(),
+       _faceDetectionEngine = faceDetectionEngine ?? MlKitFaceDetectionEngine(),
+       _pdfRasterizer = pdfRasterizer ?? PdfxDocumentRasterizer(),
+       _entityExtractionEngine =
+           entityExtractionEngine ?? HybridEntityExtractionEngine(),
+       _liteRtLmEngine = liteRtLmEngine ?? MethodChannelLiteRtLmEngine() {
+    _searchablePdfEngine =
+        searchablePdfEngine ??
         SearchablePdfEngine(
           ocrEngine: _ocrEngine,
           pdfRasterizer: _pdfRasterizer,
         );
-    _piiRedactionEngine = piiRedactionEngine ??
+    _piiRedactionEngine =
+        piiRedactionEngine ??
         PiiRedactionEngine(
           ocrEngine: _ocrEngine,
           faceDetectionEngine: _faceDetectionEngine,
           pdfRasterizer: _pdfRasterizer,
           entityExtractionEngine: _entityExtractionEngine,
         );
-    _localGenAiEngine = localGenAiEngine ??
+    _localGenAiEngine =
+        localGenAiEngine ??
         ThreeTierGenAiRuntime(
           entityExtractionEngine: _entityExtractionEngine,
           liteRtLmEngine: _liteRtLmEngine,
           tier3Runner: _liteRtLmEngine.runInference,
           inferenceTimeout: const Duration(seconds: 30),
         );
-    _visionChatPipeline = visionChatPipeline ??
+    _visionChatPipeline =
+        visionChatPipeline ??
         VisionChatPipeline(
           ocrEngine: _ocrEngine,
           pdfRasterizer: _pdfRasterizer,
@@ -99,7 +108,12 @@ class EdgeHttpServer {
   final WebAssetLoader? webAssetLoader;
   final String hostname;
 
-  HttpServer? _server;
+  final List<HttpServer> _servers = <HttpServer>[];
+  final AuthRateLimiter _rateLimiter = AuthRateLimiter();
+  String _authToken;
+  bool _tlsEnabled = false;
+  Set<String> _allowedAuthorities = const <String>{};
+  Set<String> _allowedOrigins = const <String>{};
   DateTime? _startedAt;
   int _requestCounter = 0;
 
@@ -115,9 +129,21 @@ class EdgeHttpServer {
   Stream<OpenAiJobRecord> get openAiJobs => _openAiJobController.stream;
   LocalGenAiEngine get localGenAiEngine => _localGenAiEngine;
 
-  bool get isRunning => _server != null;
-  int? get boundPort => _server?.port;
+  String get authToken => _authToken;
+  bool get isRunning => _servers.isNotEmpty;
+  bool get isTlsEnabled => _tlsEnabled;
+  int? get boundPort => _servers.isEmpty ? null : _servers.first.port;
+  List<String> get boundAddresses =>
+      _servers.map((s) => s.address.address).toList(growable: false);
   DateTime? get startedAt => _startedAt;
+
+  /// Updates the active Bearer pairing token without restarting bound sockets.
+  void updateAuthToken(String token) {
+    final trimmed = token.trim();
+    if (trimmed.isNotEmpty) {
+      _authToken = trimmed;
+    }
+  }
 
   int get uptimeSeconds {
     final started = _startedAt;
@@ -125,11 +151,62 @@ class EdgeHttpServer {
     return DateTime.now().difference(started).inSeconds;
   }
 
-  /// Begins listening on `0.0.0.0:<port>` and returns the bound port
-  /// (handy when passing `port: 0` in tests).
-  Future<int> start({int port = 8080}) async {
-    if (_server != null) {
-      return _server!.port;
+  /// Begins listening on [bindAddress] (and optionally loopback `127.0.0.1`)
+  /// on [port], enforcing Host/Origin checks and Bearer token authentication.
+  Future<int> start({
+    int port = 8080,
+    String bindAddress = "127.0.0.1",
+    bool bindLoopback = true,
+    SecurityContext? securityContext,
+    String? authToken,
+    Set<String>? allowedHosts,
+    Set<String>? allowedOrigins,
+  }) async {
+    if (_servers.isNotEmpty) {
+      return _servers.first.port;
+    }
+
+    if (authToken != null && authToken.trim().isNotEmpty) {
+      _authToken = authToken.trim();
+    }
+
+    final parsedBind = InternetAddress.tryParse(bindAddress.trim());
+    final primaryAddr =
+        (parsedBind == null ||
+            parsedBind.type != InternetAddressType.IPv4 ||
+            parsedBind.address == "0.0.0.0")
+        ? InternetAddress.loopbackIPv4
+        : parsedBind;
+
+    _tlsEnabled = securityContext != null;
+    _allowedOrigins = {
+      for (final origin in allowedOrigins ?? const <String>{})
+        if (origin.trim().isNotEmpty) origin.trim().toLowerCase(),
+    };
+
+    final hostSet = <String>{
+      primaryAddr.address,
+      if (bindLoopback) "127.0.0.1",
+      "localhost",
+      hostname.trim().toLowerCase(),
+      for (final host in allowedHosts ?? const <String>{})
+        if (host.trim().isNotEmpty) host.trim().toLowerCase(),
+    };
+
+    Set<String> buildAuthorities(int actualPort) {
+      final defaultPort = _tlsEnabled ? 443 : 80;
+      final authorities = <String>{};
+      for (final host in hostSet) {
+        authorities.add("$host:$actualPort");
+        if (actualPort == defaultPort) {
+          authorities.add(host);
+        }
+      }
+      return authorities;
+    }
+
+    if (port > 0) {
+      _allowedAuthorities = buildAuthorities(port);
     }
 
     final rootRouter = Router();
@@ -173,43 +250,81 @@ class EdgeHttpServer {
 
     final handler = const Pipeline()
         .addMiddleware(_requestLoggingMiddleware())
-        .addMiddleware(_corsMiddleware())
+        .addMiddleware(_securityHeadersMiddleware())
+        .addMiddleware(_hostAndOriginMiddleware())
+        .addMiddleware(_authenticationMiddleware())
         .addHandler((Request request) async {
-      final response = await rootRouter.call(request);
-      if (response.statusCode == 404 &&
-          response.headers["content-type"] == null) {
-        return Response.notFound(
-          jsonEncode({
-            "error": "not_found",
-            "path": "/${request.url.path}",
-          }),
-          headers: const {"content-type": "application/json; charset=utf-8"},
-        );
-      }
-      return response;
-    });
+          final response = await rootRouter.call(request);
+          if (response.statusCode == 404 &&
+              response.headers["content-type"] == null) {
+            return Response.notFound(
+              jsonEncode({
+                "error": "not_found",
+                "path": "/${request.url.path}",
+              }),
+              headers: const {
+                "content-type": "application/json; charset=utf-8",
+              },
+            );
+          }
+          return response;
+        });
 
     _startedAt = DateTime.now();
     try {
-      _server = await shelf_io.serve(
+      final primaryServer = await shelf_io.serve(
         handler,
-        InternetAddress.anyIPv4,
+        primaryAddr,
         port,
+        securityContext: securityContext,
         shared: true,
       );
-      return _server!.port;
+      _servers.add(primaryServer);
+      final actualPort = primaryServer.port;
+      _allowedAuthorities = buildAuthorities(actualPort);
+
+      if (bindLoopback && !primaryAddr.isLoopback) {
+        try {
+          final loopbackServer = await shelf_io.serve(
+            handler,
+            InternetAddress.loopbackIPv4,
+            actualPort,
+            securityContext: securityContext,
+            shared: true,
+          );
+          _servers.add(loopbackServer);
+        } on SocketException catch (error) {
+          final code = error.osError?.errorCode;
+          final msg = error.message.toLowerCase();
+          final alreadyInUse =
+              code == 98 ||
+              code == 48 ||
+              msg.contains("address already in use");
+          if (!alreadyInUse) {
+            rethrow;
+          }
+        }
+      }
+
+      return actualPort;
     } catch (_) {
+      for (final server in _servers) {
+        await server.close(force: true);
+      }
+      _servers.clear();
       _startedAt = null;
+      _tlsEnabled = false;
       rethrow;
     }
   }
 
-  /// Shuts down the HTTP server.
+  /// Shuts down all bound HTTP/HTTPS server sockets.
   Future<void> stop() async {
-    final server = _server;
-    _server = null;
+    final active = List<HttpServer>.from(_servers);
+    _servers.clear();
     _startedAt = null;
-    if (server != null) {
+    _tlsEnabled = false;
+    for (final server in active) {
       await server.close(force: true);
     }
   }
@@ -228,23 +343,145 @@ class EdgeHttpServer {
     await _openAiJobController.close();
   }
 
-  static const Map<String, String> _corsHeaders = {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers":
-        "Content-Type, Authorization, X-Requested-With",
+  static const Map<String, String> _securityHeaders = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
   };
 
-  Middleware _corsMiddleware() {
+  Middleware _securityHeadersMiddleware() {
     return (Handler innerHandler) {
       return (Request request) async {
-        if (request.method == "OPTIONS") {
-          return Response.ok("", headers: _corsHeaders);
-        }
         final response = await innerHandler(request);
-        return response.change(headers: _corsHeaders);
+        return response.change(headers: _securityHeaders);
       };
     };
+  }
+
+  Middleware _hostAndOriginMiddleware() {
+    return (Handler innerHandler) {
+      return (Request request) async {
+        final rawHost = request.headers["host"]?.trim().toLowerCase();
+        if (rawHost == null ||
+            rawHost.isEmpty ||
+            !_allowedAuthorities.contains(rawHost)) {
+          return _jsonError(
+            HttpStatus.forbidden,
+            "forbidden_host",
+            "Host header is not permitted by this server.",
+          );
+        }
+
+        if (request.method.toUpperCase() == "OPTIONS") {
+          return _jsonError(
+            HttpStatus.forbidden,
+            "cors_not_allowed",
+            "Cross-origin preflight requests are not permitted.",
+          );
+        }
+
+        final rawOrigin = request.headers["origin"]?.trim();
+        if (rawOrigin != null && rawOrigin.isNotEmpty) {
+          if (!_isAllowedOrigin(rawOrigin)) {
+            return _jsonError(
+              HttpStatus.forbidden,
+              "forbidden_origin",
+              "Cross-origin requests are not permitted.",
+            );
+          }
+        }
+
+        return innerHandler(request);
+      };
+    };
+  }
+
+  bool _isAllowedOrigin(String rawOrigin) {
+    final lower = rawOrigin.toLowerCase();
+    if (lower == "null") {
+      return false;
+    }
+    if (_allowedOrigins.contains(lower)) {
+      return true;
+    }
+    final uri = Uri.tryParse(rawOrigin);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return false;
+    }
+    final expectedScheme = _tlsEnabled ? "https" : "http";
+    if (uri.scheme.toLowerCase() != expectedScheme) {
+      return false;
+    }
+    final defaultPort = expectedScheme == "https" ? 443 : 80;
+    final port = uri.hasPort ? uri.port : defaultPort;
+    final authority = "${uri.host.toLowerCase()}:$port";
+    return _allowedAuthorities.contains(authority);
+  }
+
+  Middleware _authenticationMiddleware() {
+    return (Handler innerHandler) {
+      return (Request request) async {
+        final path = request.url.path;
+        final method = request.method.toUpperCase();
+        final isApiRoute = path == "v1" || path.startsWith("v1/");
+        if (!isApiRoute && (method == "GET" || method == "HEAD")) {
+          return innerHandler(request);
+        }
+
+        final connectionInfo =
+            request.context["shelf.io.connection_info"] as HttpConnectionInfo?;
+        final remoteIp = connectionInfo?.remoteAddress.address ?? "unknown";
+
+        if (_rateLimiter.isBlocked(remoteIp)) {
+          return Response(
+            429,
+            body: jsonEncode({
+              "error": "too_many_requests",
+              "message": "Too many failed authentication attempts.",
+            }),
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "retry-after": "${_rateLimiter.retryAfterSeconds(remoteIp)}",
+            },
+          );
+        }
+
+        final authHeader = request.headers["authorization"]?.trim() ?? "";
+        String? candidate;
+        if (authHeader.length > 7 &&
+            authHeader.substring(0, 7).toLowerCase() == "bearer ") {
+          candidate = authHeader.substring(7).trim();
+        }
+
+        if (candidate == null ||
+            !PairingTokenService.verifyToken(candidate, _authToken)) {
+          _rateLimiter.recordFailure(remoteIp);
+          return Response(
+            HttpStatus.unauthorized,
+            body: jsonEncode({
+              "error": "unauthorized",
+              "message": "Valid Bearer pairing token required.",
+            }),
+            headers: const {
+              "content-type": "application/json; charset=utf-8",
+              "www-authenticate": "Bearer realm=\"Droid Edge Server\"",
+            },
+          );
+        }
+
+        _rateLimiter.reset(remoteIp);
+        return innerHandler(request);
+      };
+    };
+  }
+
+  static Response _jsonError(int statusCode, String error, String message) {
+    return Response(
+      statusCode,
+      body: jsonEncode({"error": error, "message": message}),
+      headers: const {"content-type": "application/json; charset=utf-8"},
+    );
   }
 
   Middleware _requestLoggingMiddleware() {
@@ -271,8 +508,9 @@ class EdgeHttpServer {
         }
 
         _requestCounter++;
-        final normalizedPath =
-            request.requestedUri.path.isEmpty ? "/" : request.requestedUri.path;
+        final normalizedPath = request.requestedUri.path.isEmpty
+            ? "/"
+            : request.requestedUri.path;
 
         if (!_logController.isClosed) {
           _logController.add(
@@ -293,4 +531,3 @@ class EdgeHttpServer {
     };
   }
 }
-
