@@ -16,9 +16,15 @@
           <p class="subtitle">100% Offline LAN OCR, Document PDF &amp; PII Redaction Console</p>
         </div>
       </div>
-      <div class="server-pill" id="serverStatusPill" aria-live="polite">
-        <span class="dot" id="serverStatusDot"></span>
-        <span id="serverStatusText">Connecting…</span>
+      <div class="topbar-actions">
+        <button type="button" class="auth-pill" id="authBtn" aria-haspopup="dialog">
+          <span class="dot" id="authDot"></span>
+          <span id="authBtnText">Pair Token</span>
+        </button>
+        <div class="server-pill" id="serverStatusPill" aria-live="polite">
+          <span class="dot" id="serverStatusDot"></span>
+          <span id="serverStatusText">Connecting…</span>
+        </div>
       </div>
     </header>
 
@@ -265,6 +271,35 @@
       </section>
     </main>
   </div>
+
+  <dialog id="authModal" class="auth-modal" aria-labelledby="authModalTitle">
+    <form id="authForm" class="auth-modal-card" method="dialog">
+      <div class="auth-modal-header">
+        <h2 id="authModalTitle">Pair with Droid Edge Server</h2>
+        <button type="button" class="btn-secondary btn-xs" id="authCloseBtn" aria-label="Close pairing dialog">×</button>
+      </div>
+      <p class="auth-modal-hint">
+        Enter the Bearer pairing token shown on your Android device's dashboard.
+        It is stored only for this browser tab session.
+      </p>
+      <label class="auth-field" for="authTokenInput">
+        <span>Pairing Token</span>
+        <input
+          type="password"
+          id="authTokenInput"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="des_..."
+          required
+        >
+      </label>
+      <p class="auth-error hidden" id="authErrorText" role="alert"></p>
+      <div class="auth-modal-actions">
+        <button type="button" class="btn-secondary hidden" id="authDisconnectBtn">Clear Token</button>
+        <button type="submit" class="btn-primary" id="authSaveBtn">Pair &amp; Connect</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="/app.js"></script>
 </body>

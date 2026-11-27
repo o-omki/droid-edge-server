@@ -83,108 +83,119 @@ class DashboardScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                BlocBuilder<ServerBloc, ServerState>(
-                  builder: (context, serverState) {
-                    return Column(
-                      children: [
-                        ServerControlCard(
-                          state: serverState,
-                          onToggle: () {
-                            final bloc = context.read<ServerBloc>();
-                            if (serverState.isRunning) {
-                              bloc.add(const ServerStopRequested());
-                            } else {
-                              bloc.add(
-                                ServerStartRequested(port: serverState.port),
-                              );
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        NetworkQrCard(
-                          state: serverState,
-                          onRefreshIp: () => context.read<ServerBloc>().add(
-                            const ServerIpRefreshRequested(),
+                  BlocBuilder<ServerBloc, ServerState>(
+                    builder: (context, serverState) {
+                      return Column(
+                        children: [
+                          ServerControlCard(
+                            state: serverState,
+                            onToggle: () {
+                              final bloc = context.read<ServerBloc>();
+                              if (serverState.isRunning) {
+                                bloc.add(const ServerStopRequested());
+                              } else {
+                                bloc.add(
+                                  ServerStartRequested(port: serverState.port),
+                                );
+                              }
+                            },
                           ),
+                          const SizedBox(height: 16),
+                          NetworkQrCard(
+                            state: serverState,
+                            onRefreshIp: () => context.read<ServerBloc>().add(
+                              const ServerIpRefreshRequested(),
+                            ),
+                            onRotateToken: () => context.read<ServerBloc>().add(
+                              const ServerTokenRotateRequested(),
+                            ),
+                            onExportCaCert: serverState.caCertPem.isEmpty
+                                ? null
+                                : () async {
+                                    final bloc = context.read<ServerBloc>();
+                                    await bloc.localCaService
+                                        .exportCaCertificateFile(
+                                          serverState.caCertPem,
+                                        );
+                                  },
+                          ),
+                          const SizedBox(height: 16),
+                          BlocBuilder<TelemetryCubit, TelemetryState>(
+                            builder: (context, telemetryState) {
+                              return TelemetryCard(
+                                telemetryState: telemetryState,
+                                serverState: serverState,
+                                onRefreshTelemetry: () =>
+                                    context.read<TelemetryCubit>().refresh(),
+                                onRequestBatteryOptimization: () =>
+                                    context.read<ServerBloc>().add(
+                                      const ServerBatteryOptimizationRequested(),
+                                    ),
+                              );
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  BlocBuilder<DocumentPipelineCubit, DocumentPipelineState>(
+                    builder: (context, docState) {
+                      return DocumentPipelineCard(
+                        state: docState,
+                        onClear: () => context
+                            .read<DocumentPipelineCubit>()
+                            .clearHistory(),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  BlocBuilder<ServerBloc, ServerState>(
+                    builder: (context, serverState) {
+                      return BlocBuilder<AiGatewayCubit, AiGatewayState>(
+                        builder: (context, aiState) {
+                          return AiGatewayCard(
+                            state: aiState,
+                            serverState: serverState,
+                            onRefreshCapabilities: () => context
+                                .read<AiGatewayCubit>()
+                                .refreshCapabilities(),
+                            onToggleTier2: (enabled) => context
+                                .read<AiGatewayCubit>()
+                                .toggleTier2(enabled),
+                            onToggleTier3: (enabled) => context
+                                .read<AiGatewayCubit>()
+                                .toggleTier3(enabled),
+                            onPickTier3Model: () => context
+                                .read<AiGatewayCubit>()
+                                .pickTier3ModelFile(),
+                            onSetTier3ModelPath: (path) => context
+                                .read<AiGatewayCubit>()
+                                .setTier3ModelPath(path),
+                            onClearHistory: () =>
+                                context.read<AiGatewayCubit>().clearHistory(),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  BlocBuilder<RequestLogBloc, RequestLogState>(
+                    builder: (context, logState) {
+                      return RequestLogList(
+                        state: logState,
+                        onClear: () => context.read<RequestLogBloc>().add(
+                          const RequestLogCleared(),
                         ),
-                        const SizedBox(height: 16),
-                        BlocBuilder<TelemetryCubit, TelemetryState>(
-                          builder: (context, telemetryState) {
-                            return TelemetryCard(
-                              telemetryState: telemetryState,
-                              serverState: serverState,
-                              onRefreshTelemetry: () =>
-                                  context.read<TelemetryCubit>().refresh(),
-                              onRequestBatteryOptimization: () =>
-                                  context.read<ServerBloc>().add(
-                                        const ServerBatteryOptimizationRequested(),
-                                      ),
-                            );
-                          },
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                BlocBuilder<DocumentPipelineCubit, DocumentPipelineState>(
-                  builder: (context, docState) {
-                    return DocumentPipelineCard(
-                      state: docState,
-                      onClear: () => context
-                          .read<DocumentPipelineCubit>()
-                          .clearHistory(),
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                BlocBuilder<ServerBloc, ServerState>(
-                  builder: (context, serverState) {
-                    return BlocBuilder<AiGatewayCubit, AiGatewayState>(
-                      builder: (context, aiState) {
-                        return AiGatewayCard(
-                          state: aiState,
-                          serverState: serverState,
-                          onRefreshCapabilities: () => context
-                              .read<AiGatewayCubit>()
-                              .refreshCapabilities(),
-                          onToggleTier2: (enabled) => context
-                              .read<AiGatewayCubit>()
-                              .toggleTier2(enabled),
-                          onToggleTier3: (enabled) => context
-                              .read<AiGatewayCubit>()
-                              .toggleTier3(enabled),
-                          onPickTier3Model: () => context
-                              .read<AiGatewayCubit>()
-                              .pickTier3ModelFile(),
-                          onSetTier3ModelPath: (path) => context
-                              .read<AiGatewayCubit>()
-                              .setTier3ModelPath(path),
-                          onClearHistory: () => context
-                              .read<AiGatewayCubit>()
-                              .clearHistory(),
-                        );
-                      },
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                BlocBuilder<RequestLogBloc, RequestLogState>(
-                  builder: (context, logState) {
-                    return RequestLogList(
-                      state: logState,
-                      onClear: () => context.read<RequestLogBloc>().add(
-                        const RequestLogCleared(),
-                      ),
-                    );
-                  },
-                ),
-              ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
   }
 }
