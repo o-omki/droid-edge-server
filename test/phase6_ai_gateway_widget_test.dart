@@ -142,7 +142,7 @@ void main() {
         find.text("OpenAI Vision & Structured Extraction"),
         findsOneWidget,
       );
-      expect(find.text("http://192.168.1.42:8080/v1"), findsOneWidget);
+      expect(find.text("https://192.168.1.42:8080/v1"), findsOneWidget);
       expect(find.text("Tier 1 Active"), findsOneWidget);
       expect(find.text("2 total"), findsOneWidget);
       expect(find.text("Table"), findsOneWidget);

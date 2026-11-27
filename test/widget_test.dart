@@ -1,11 +1,15 @@
 import "dart:async";
+import "dart:io";
 
 import "package:droid_edge_server/app.dart";
 import "package:droid_edge_server/models/request_log_entry.dart";
 import "package:droid_edge_server/server/edge_http_server.dart";
 import "package:droid_edge_server/services/foreground_service_manager.dart";
+import "package:droid_edge_server/services/local_ca_service.dart";
 import "package:droid_edge_server/services/mdns_service.dart";
 import "package:droid_edge_server/services/network_info_service.dart";
+import "package:droid_edge_server/services/pairing_token_service.dart";
+import "package:droid_edge_server/services/secure_key_store.dart";
 import "package:flutter/material.dart";
 import "package:flutter_test/flutter_test.dart";
 
@@ -20,6 +24,7 @@ class _FakeForegroundServiceManager extends ForegroundServiceManager {
     required String ipAddress,
     required int port,
     String hostname = "android-edge.local",
+    bool tlsEnabled = true,
   }) async {}
 
   @override
@@ -36,7 +41,11 @@ class _FakeMdnsService extends MdnsService {
   bool get isRunning => _running;
 
   @override
-  Future<void> start({required String ipAddress, required int port}) async {
+  Future<void> start({
+    required String ipAddress,
+    required int port,
+    bool tlsEnabled = true,
+  }) async {
     _running = true;
   }
 
@@ -67,7 +76,15 @@ class _FakeEdgeHttpServer extends EdgeHttpServer {
   DateTime? get startedAt => _startedAt;
 
   @override
-  Future<int> start({int port = 8080}) async {
+  Future<int> start({
+    int port = 8080,
+    String bindAddress = "127.0.0.1",
+    bool bindLoopback = true,
+    SecurityContext? securityContext,
+    String? authToken,
+    Set<String>? allowedHosts,
+    Set<String>? allowedOrigins,
+  }) async {
     _running = true;
     _startedAt = DateTime.now();
     return port == 0 ? 8080 : port;
@@ -91,6 +108,7 @@ void main() {
     WidgetTester tester,
   ) async {
     final server = _FakeEdgeHttpServer();
+    final keyStore = InMemorySecureKeyStore();
     addTearDown(server.dispose);
 
     await tester.pumpWidget(
@@ -99,6 +117,8 @@ void main() {
         networkInfoService: _FakeNetworkInfoService(),
         foregroundServiceManager: _FakeForegroundServiceManager(),
         mdnsService: _FakeMdnsService(),
+        pairingTokenService: PairingTokenService(keyStore: keyStore),
+        localCaService: LocalCaService(keyStore: keyStore),
       ),
     );
     await tester.pumpAndSettle();
@@ -106,7 +126,8 @@ void main() {
     expect(find.text("Droid Edge Server"), findsOneWidget);
     expect(find.text("Stopped"), findsOneWidget);
     expect(find.text("Start Server"), findsOneWidget);
-    expect(find.text("http://192.168.1.42:8080"), findsOneWidget);
+    expect(find.text("https://192.168.1.42:8080"), findsOneWidget);
+    expect(find.text("HTTPS (Local CA)"), findsOneWidget);
     expect(find.text("Device Telemetry & Discovery"), findsOneWidget);
 
     await tester.tap(find.text("Start Server"));

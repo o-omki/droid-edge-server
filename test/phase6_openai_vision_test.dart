@@ -711,6 +711,10 @@ void main() {
       try {
         final req = await client.post("127.0.0.1", port, path);
         req.headers.set(
+          HttpHeaders.authorizationHeader,
+          "Bearer ${server.authToken}",
+        );
+        req.headers.set(
           HttpHeaders.contentTypeHeader,
           "application/json; charset=utf-8",
         );
@@ -723,16 +727,20 @@ void main() {
       }
     }
 
-    test("GET /v1/models and OPTIONS preflight return OpenAI model list & CORS", () async {
+    test("GET /v1/models returns OpenAI model list and rejects OPTIONS preflight without wildcard CORS", () async {
       final client = HttpClient();
       addTearDown(client.close);
 
       final optReq = await client.open("OPTIONS", "127.0.0.1", port, "/v1/chat/completions");
       final optRes = await optReq.close();
-      expect(optRes.statusCode, HttpStatus.ok);
-      expect(optRes.headers.value("access-control-allow-origin"), "*");
+      expect(optRes.statusCode, HttpStatus.forbidden);
+      expect(optRes.headers.value("access-control-allow-origin"), isNull);
 
       final req = await client.get("127.0.0.1", port, "/v1/models");
+      req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       final res = await req.close();
       final json = jsonDecode(await utf8.decoder.bind(res).join())
           as Map<String, dynamic>;
@@ -938,6 +946,10 @@ void main() {
       final client = HttpClient();
       addTearDown(client.close);
       final req = await client.post("127.0.0.1", fPort, "/v1/chat/completions");
+      req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${fallbackServer.authToken}",
+      );
       req.headers.set(HttpHeaders.contentTypeHeader, "application/json");
       req.add(
         utf8.encode(

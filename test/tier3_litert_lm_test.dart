@@ -521,8 +521,13 @@ void main() {
       addTearDown(client.close);
 
       // 1. Before model path is configured, gemma-local is omitted.
-      final initialModelsRes =
-          await (await client.get("127.0.0.1", port, "/v1/models")).close();
+      final initialModelsReq =
+          await client.get("127.0.0.1", port, "/v1/models");
+      initialModelsReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
+      final initialModelsRes = await initialModelsReq.close();
       final initialModelsJson =
           jsonDecode(await utf8.decoder.bind(initialModelsRes).join())
               as Map<String, dynamic>;
@@ -534,6 +539,10 @@ void main() {
       // 2. Configure Tier 3 via POST /v1/ai/capabilities.
       final capReq =
           await client.post("127.0.0.1", port, "/v1/ai/capabilities");
+      capReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       capReq.headers.set(HttpHeaders.contentTypeHeader, "application/json");
       capReq.add(
         utf8.encode(
@@ -551,8 +560,13 @@ void main() {
       expect(capJson["tier3"]["status"], "available");
 
       // 3. GET /v1/models now advertises gemma-local.
-      final readyModelsRes =
-          await (await client.get("127.0.0.1", port, "/v1/models")).close();
+      final readyModelsReq =
+          await client.get("127.0.0.1", port, "/v1/models");
+      readyModelsReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
+      final readyModelsRes = await readyModelsReq.close();
       final readyModelsJson =
           jsonDecode(await utf8.decoder.bind(readyModelsRes).join())
               as Map<String, dynamic>;
@@ -566,6 +580,10 @@ void main() {
           "data:image/png;base64,${base64Encode(_samplePngBytes())}";
       final chatReq =
           await client.post("127.0.0.1", port, "/v1/chat/completions");
+      chatReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       chatReq.headers.set(HttpHeaders.contentTypeHeader, "application/json");
       chatReq.add(
         utf8.encode(
@@ -598,6 +616,10 @@ void main() {
       shouldFail = true;
       final failReq =
           await client.post("127.0.0.1", port, "/v1/chat/completions");
+      failReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       failReq.headers.set(HttpHeaders.contentTypeHeader, "application/json");
       failReq.add(
         utf8.encode(

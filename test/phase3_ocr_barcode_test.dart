@@ -231,6 +231,10 @@ void main() {
 
       final request = await client.post("127.0.0.1", port, "/v1/ocr");
       request.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
+      request.headers.set(
         HttpHeaders.contentTypeHeader,
         "multipart/form-data; boundary=$boundary",
       );
@@ -263,6 +267,10 @@ void main() {
 
       final request =
           await client.post("127.0.0.1", port, "/v1/ocr?script=latin");
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       request.headers.set(HttpHeaders.contentTypeHeader, "image/png");
       request.add(samplePng);
 
@@ -282,6 +290,10 @@ void main() {
 
       final dataUri = "data:image/png;base64,${base64Encode(samplePng)}";
       final request = await client.post("127.0.0.1", port, "/v1/ocr");
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       request.headers.set(
         HttpHeaders.contentTypeHeader,
         "application/json; charset=utf-8",
@@ -309,10 +321,18 @@ void main() {
       addTearDown(client.close);
 
       final emptyReq = await client.post("127.0.0.1", port, "/v1/ocr");
+      emptyReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       final emptyRes = await emptyReq.close();
       expect(emptyRes.statusCode, HttpStatus.badRequest);
 
       final invalidBytesReq = await client.post("127.0.0.1", port, "/v1/ocr");
+      invalidBytesReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       invalidBytesReq.headers
           .set(HttpHeaders.contentTypeHeader, "application/octet-stream");
       invalidBytesReq.add(utf8.encode("not-an-image"));
@@ -321,6 +341,10 @@ void main() {
 
       final badScriptReq =
           await client.post("127.0.0.1", port, "/v1/ocr?script=klingon");
+      badScriptReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       badScriptReq.headers.set(HttpHeaders.contentTypeHeader, "image/png");
       badScriptReq.add(samplePng);
       final badScriptRes = await badScriptReq.close();
@@ -343,6 +367,10 @@ void main() {
       );
       final multiReq = await client.post("127.0.0.1", port, "/v1/barcode");
       multiReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
+      multiReq.headers.set(
         HttpHeaders.contentTypeHeader,
         "multipart/form-data; boundary=$boundary",
       );
@@ -361,6 +389,10 @@ void main() {
 
       // 2. Raw binary upload.
       final binReq = await client.post("127.0.0.1", port, "/v1/barcode");
+      binReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       binReq.headers.set(HttpHeaders.contentTypeHeader, "image/png");
       binReq.add(samplePng);
       final binRes = await binReq.close();
@@ -369,6 +401,10 @@ void main() {
 
       // 3. Base64 JSON upload.
       final jsonReq = await client.post("127.0.0.1", port, "/v1/barcode");
+      jsonReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       jsonReq.headers
           .set(HttpHeaders.contentTypeHeader, "application/json");
       jsonReq.write(jsonEncode({"image": base64Encode(samplePng)}));
@@ -383,6 +419,10 @@ void main() {
       addTearDown(client.close);
 
       final badReq = await client.post("127.0.0.1", port, "/v1/barcode");
+      badReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       badReq.headers.set(HttpHeaders.contentTypeHeader, "application/json");
       badReq.write(jsonEncode({"image": "%%%not-base64%%%"}));
       final badRes = await badReq.close();

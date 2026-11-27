@@ -427,6 +427,10 @@ void main() {
       final req =
           await client.post("127.0.0.1", port, "/v1/doc/searchable-pdf");
       req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
+      req.headers.set(
         HttpHeaders.contentTypeHeader,
         "multipart/form-data; boundary=$boundary",
       );
@@ -473,6 +477,10 @@ void main() {
         port,
         "/v1/doc/searchable-pdf?page_format=letter&max_size_mb=0.18&response_format=json",
       );
+      req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       req.headers.set(HttpHeaders.contentTypeHeader, "application/pdf");
       req.add(scannedPdf);
 
@@ -510,6 +518,10 @@ void main() {
         "127.0.0.1",
         port,
         "/v1/doc/redact?presets=all&keep_last_4=false&output_format=image",
+      );
+      req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
       );
       req.headers.set(HttpHeaders.contentTypeHeader, "image/jpeg");
       req.add(sourceJpeg);
@@ -555,6 +567,10 @@ void main() {
       addTearDown(client.close);
 
       final req = await client.post("127.0.0.1", port, "/v1/doc/redact");
+      req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       req.headers.set(
         HttpHeaders.contentTypeHeader,
         "application/json; charset=utf-8",
@@ -643,6 +659,10 @@ void main() {
 
       final req = await client.post("127.0.0.1", port, "/v1/doc/batch-zip");
       req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
+      req.headers.set(
         HttpHeaders.contentTypeHeader,
         "multipart/form-data; boundary=$boundary",
       );
@@ -683,6 +703,10 @@ void main() {
 
       final emptyReq =
           await client.post("127.0.0.1", port, "/v1/doc/searchable-pdf");
+      emptyReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
+      );
       final emptyRes = await emptyReq.close();
       expect(emptyRes.statusCode, HttpStatus.badRequest);
 
@@ -690,6 +714,10 @@ void main() {
         "127.0.0.1",
         port,
         "/v1/doc/searchable-pdf?max_size_mb=-1",
+      );
+      badLimitReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
       );
       badLimitReq.headers.set(HttpHeaders.contentTypeHeader, "image/jpeg");
       badLimitReq.add(_createMetadataTestJpeg());
@@ -700,6 +728,10 @@ void main() {
         "127.0.0.1",
         port,
         "/v1/doc/redact?presets=unknown_preset",
+      );
+      badPresetReq.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${server.authToken}",
       );
       badPresetReq.headers.set(HttpHeaders.contentTypeHeader, "image/jpeg");
       badPresetReq.add(_createMetadataTestJpeg());
@@ -753,6 +785,10 @@ void main() {
 
       // Verify keep_last_4=true (UIDAI Masked Aadhaar mode).
       final req = await client.post("127.0.0.1", indianPort, "/v1/doc/redact");
+      req.headers.set(
+        HttpHeaders.authorizationHeader,
+        "Bearer ${indianServer.authToken}",
+      );
       req.headers.set(
         HttpHeaders.contentTypeHeader,
         "application/json; charset=utf-8",

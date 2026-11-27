@@ -72,6 +72,13 @@ dependencies:
   google_mlkit_entity_extraction: ^1.0.3
   google_mlkit_genai_prompt: ^0.4.2
 
+  # LAN TLS (Local CA), Secure Key Storage & Certificate Export
+  pointycastle: ^4.0.0
+  crypto: ^3.0.8
+  flutter_secure_storage: ^10.2.0
+  path_provider: ^2.1.6
+  share_plus: ^13.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
