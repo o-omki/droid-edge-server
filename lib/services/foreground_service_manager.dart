@@ -56,6 +56,7 @@ class ForegroundServiceManager {
     required String ipAddress,
     required int port,
     String hostname = "android-edge.local",
+    bool tlsEnabled = true,
   }) async {
     if (!isSupported) return;
     await initialize();
@@ -66,8 +67,9 @@ class ForegroundServiceManager {
       await FlutterForegroundTask.requestNotificationPermission();
     }
 
+    final scheme = tlsEnabled ? "https" : "http";
     final title = "Edge Server Running (:$port)";
-    final body = "http://$ipAddress:$port • http://$hostname:$port";
+    final body = "$scheme://$ipAddress:$port • $scheme://$hostname:$port";
 
     if (await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.updateService(
@@ -113,4 +115,3 @@ class ForegroundServiceManager {
     }
   }
 }
-
