@@ -12,6 +12,10 @@ class ServerState extends Equatable {
     this.mdnsHostname = "android-edge.local",
     this.mdnsActive = false,
     this.batteryOptimizationIgnored = true,
+    this.tlsEnabled = true,
+    this.pairingToken = "",
+    this.caFingerprintSha256 = "",
+    this.caCertPem = "",
   });
 
   final ServerStatusKind status;
@@ -22,13 +26,18 @@ class ServerState extends Equatable {
   final String mdnsHostname;
   final bool mdnsActive;
   final bool batteryOptimizationIgnored;
+  final bool tlsEnabled;
+  final String pairingToken;
+  final String caFingerprintSha256;
+  final String caCertPem;
 
   bool get isRunning => status == ServerStatusKind.running;
   bool get isBusy =>
       status == ServerStatusKind.starting || status == ServerStatusKind.stopping;
 
-  String get baseUrl => "http://$ipAddress:$port";
-  String get mdnsUrl => "http://$mdnsHostname:$port";
+  String get scheme => tlsEnabled ? "https" : "http";
+  String get baseUrl => "$scheme://$ipAddress:$port";
+  String get mdnsUrl => "$scheme://$mdnsHostname:$port";
 
   ServerState copyWith({
     ServerStatusKind? status,
@@ -41,6 +50,10 @@ class ServerState extends Equatable {
     String? mdnsHostname,
     bool? mdnsActive,
     bool? batteryOptimizationIgnored,
+    bool? tlsEnabled,
+    String? pairingToken,
+    String? caFingerprintSha256,
+    String? caCertPem,
   }) {
     return ServerState(
       status: status ?? this.status,
@@ -52,6 +65,11 @@ class ServerState extends Equatable {
       mdnsActive: mdnsActive ?? this.mdnsActive,
       batteryOptimizationIgnored:
           batteryOptimizationIgnored ?? this.batteryOptimizationIgnored,
+      tlsEnabled: tlsEnabled ?? this.tlsEnabled,
+      pairingToken: pairingToken ?? this.pairingToken,
+      caFingerprintSha256:
+          caFingerprintSha256 ?? this.caFingerprintSha256,
+      caCertPem: caCertPem ?? this.caCertPem,
     );
   }
 
@@ -65,6 +83,10 @@ class ServerState extends Equatable {
         mdnsHostname,
         mdnsActive,
         batteryOptimizationIgnored,
+        tlsEnabled,
+        pairingToken,
+        caFingerprintSha256,
+        caCertPem,
       ];
 }
 
